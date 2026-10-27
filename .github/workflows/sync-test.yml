@@ -30,7 +30,7 @@ jobs:
         env:
           CONTENTFUL_DELIVERY_TOKEN: ${{ secrets.CONTENTFUL_DELIVERY_TOKEN }}
         run: |
-          python sync/sync_test.py --days "${{ inputs.days }}" ${{ inputs.full_sync && '' || '--skip-full-sync' }}
+          python sync/sync_test.py --days "${{ inputs.days }}" ${{ inputs.full_sync == false && '--skip-full-sync' || '' }}
 
       - name: Upload report
         if: always()

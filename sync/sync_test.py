@@ -26,7 +26,7 @@ BASE = f"https://cdn.contentful.com/spaces/{SPACE}/environments/{ENV}"
 TOKEN = os.environ.get("CONTENTFUL_DELIVERY_TOKEN", "").strip()
 
 
-def get(path_or_url: str, params: dict | None = None) -> dict:
+def get(path_or_url: str, params: dict | None = None, too_big_ok: bool = False) -> dict:
     url = path_or_url if path_or_url.startswith("http") else BASE + path_or_url
     if params:
         url += ("&" if "?" in url else "?") + urllib.parse.urlencode(params)
@@ -40,6 +40,8 @@ def get(path_or_url: str, params: dict | None = None) -> dict:
                 time.sleep(float(e.headers.get("X-Contentful-RateLimit-Reset", 1)) + 0.5)
                 continue
             body = e.read().decode("utf-8", "ignore")[:300]
+            if too_big_ok and "Response size too big" in body:
+                raise TooBig()
             raise SystemExit(f"Contentful returned HTTP {e.code} for {url.split('?')[0]}: {body}")
     raise SystemExit("Rate limited too many times")
 
@@ -58,12 +60,29 @@ def links_in(value):
             yield from links_in(v)
 
 
-def fetch_entries(ids: list[str]) -> list[dict]:
+class TooBig(Exception):
+    pass
+
+
+def fetch_entries(ids: list[str], chunk: int = 25) -> list[dict]:
+    """Fetch entries with all locales, no linked entries included. Halves the batch
+    when Contentful says the response is too big (some entries are very large)."""
     out = []
-    for i in range(0, len(ids), 100):
-        chunk = ids[i:i + 100]
-        res = get("/entries", {"sys.id[in]": ",".join(chunk), "locale": "*", "limit": 100})
+    i = 0
+    while i < len(ids):
+        part = ids[i:i + chunk]
+        try:
+            res = get("/entries", {"sys.id[in]": ",".join(part), "locale": "*",
+                                   "include": 0, "limit": len(part)}, too_big_ok=True)
+        except TooBig:
+            if chunk == 1:
+                print(f"Skipping entry {part[0]}: too large to fetch with all locales")
+                i += 1
+                continue
+            chunk = max(1, chunk // 2)
+            continue
         out += res.get("items", [])
+        i += len(part)
     return out
 
 
@@ -119,10 +138,20 @@ def entry_name(e: dict) -> str:
 def full_initial_sync(time_budget_s: int = 900):
     started = time.monotonic()
     counts, pages, bytes_total = Counter(), 0, 0
-    url, params = "/sync", {"initial": "true", "limit": 1000}
+    url, params = "/sync", {"initial": "true", "limit": 200}
     next_sync = None
     while url:
-        res = get(url, params)
+        try:
+            res = get(url, params, too_big_ok=True)
+        except TooBig:
+            if params and params["limit"] > 10:   # first page: retry with smaller pages
+                params["limit"] //= 2
+                continue
+            return dict(complete=False, pages=pages, counts=counts, mb=bytes_total / 1e6,
+                        seconds=round(time.monotonic() - started), next_sync=None,
+                        note="a page was too large to return")
+        if params:
+            print(f"Initial sync page size: {params['limit']}")
         params = None
         pages += 1
         bytes_total += len(json.dumps(res))
