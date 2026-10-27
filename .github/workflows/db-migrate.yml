@@ -1,0 +1,52 @@
+name: Apply database migrations
+
+# Applies new files in supabase/migrations to the Supabase project.
+# Runs on every push to main that touches migrations, or by hand.
+on:
+  push:
+    branches: [main]
+    paths: ["supabase/migrations/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: db-migrate
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: 2.53.6
+
+      - name: Check secrets are set
+        run: |
+          for v in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD SUPABASE_PROJECT_REF; do
+            if [ -z "${!v}" ]; then echo "::error::Missing repository secret $v"; exit 1; fi
+          done
+
+      - name: Link project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+
+      - name: Apply migrations
+        run: supabase db push --password "$SUPABASE_DB_PASSWORD" --include-all
+
+      - name: Show migration status
+        run: |
+          {
+            echo "## Database migrations"
+            echo '```'
+            supabase migration list --password "$SUPABASE_DB_PASSWORD"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
