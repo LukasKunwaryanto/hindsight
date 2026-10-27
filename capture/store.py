@@ -10,6 +10,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 ASSET_BUCKET = "assets"
 EXT = {"image/avif": "avif", "image/webp": "webp", "image/png": "png", "image/svg+xml": "svg",
@@ -20,6 +21,7 @@ class SupabaseStore:
     def __init__(self, url: str, key: str):
         self.url = url.rstrip("/")
         self.headers = {"apikey": key}
+        self.calls, self.wait = 0, 0.0
         if key.startswith("eyJ"):  # legacy JWT keys also go in Authorization
             self.headers["Authorization"] = f"Bearer {key}"
 
@@ -35,9 +37,14 @@ class SupabaseStore:
         h.update(headers or {})
         for attempt in range(4):
             req = urllib.request.Request(url, data=data, method=method, headers=h)
+            t0 = time.monotonic()
             try:
-                with urllib.request.urlopen(req, timeout=120) as r:
+                with urllib.request.urlopen(req, timeout=60) as r:
                     txt = r.read()
+                    self.calls += 1
+                    self.wait += time.monotonic() - t0
+                    if time.monotonic() - t0 > 3:
+                        print(f"  slow: {method} {path} {time.monotonic() - t0:.1f}s", flush=True)
                     return json.loads(txt) if txt and r.headers.get("content-type", "").startswith("application/json") else None
             except urllib.error.HTTPError as e:
                 msg = e.read().decode("utf-8", "ignore")[:500]
@@ -65,7 +72,8 @@ class SupabaseStore:
 
     # --- pieces ----------------------------------------------------------------
     def save_blobs(self, blobs: dict[str, tuple[str, str]]) -> dict:
-        new = [h for h in blobs if h not in self._existing("blobs", list(blobs))]
+        existing = self._existing("blobs", list(blobs))
+        new = [h for h in blobs if h not in existing]
         rows, stats = [], {}
         for h in new:
             kind, text = blobs[h]
@@ -76,18 +84,20 @@ class SupabaseStore:
         return stats
 
     def save_assets(self, assets: dict[str, dict]) -> int:
-        new = [h for h in assets if h not in self._existing("assets", list(assets))]
-        total = 0
-        for h in new:
-            a = assets[h]
-            path = f"{h[:2]}/{h}.{EXT.get(a['mime'], 'bin')}"
-            self._req("POST", f"/storage/v1/object/{ASSET_BUCKET}/{path}", a["bytes"],
-                      {"Content-Type": a["mime"], "x-upsert": "true", "cache-control": "max-age=31536000"}, raw=True)
-            self._insert("assets", [{"hash": h, "mime": a["mime"], "storage_path": path, "width": a["w"],
-                                     "height": a["h"], "size_bytes": len(a["bytes"]), "source_url": a["url"][:2000]}],
-                         on_conflict="hash")
-            total += len(a["bytes"])
-        return total
+        existing = self._existing("assets", list(assets))
+        new = [h for h in assets if h not in existing]
+        path = lambda h: f"{h[:2]}/{h}.{EXT.get(assets[h]['mime'], 'bin')}"
+
+        def upload(h):
+            self._req("POST", f"/storage/v1/object/{ASSET_BUCKET}/{path(h)}", assets[h]["bytes"],
+                      {"Content-Type": assets[h]["mime"], "x-upsert": "true", "cache-control": "max-age=31536000"}, raw=True)
+
+        with ThreadPoolExecutor(8) as pool:  # files first, then the rows that point at them
+            list(pool.map(upload, new))
+        self._insert("assets", [{"hash": h, "mime": assets[h]["mime"], "storage_path": path(h), "width": assets[h]["w"],
+                                 "height": assets[h]["h"], "size_bytes": len(assets[h]["bytes"]),
+                                 "source_url": assets[h]["url"][:2000]} for h in new], on_conflict="hash")
+        return sum(len(assets[h]["bytes"]) for h in new)
 
     def card_prices(self, market: str, skus: list[str]) -> dict[str, str]:
         out = {}

@@ -58,6 +58,7 @@ async def capture_one(browser, store, market, url, device, reason, rebuild_dir):
         for h in [h for h, (k, _) in P.blobs.items() if k == "price" and h not in used]:
             del P.blobs[h]
 
+        t_store = time.monotonic()
         blob_stats = store.save_blobs(P.blobs)
         asset_bytes = store.save_assets(P.assets)
         if new_prices:
@@ -70,6 +71,7 @@ async def capture_one(browser, store, market, url, device, reason, rebuild_dir):
             "images": len(frozen["imgs"]), "images_not_loaded": frozen["images_not_loaded"],
             "pieces": len(P.blobs), "assets": len(P.assets),
             "new_bytes": {**blob_stats, "assets": asset_bytes}, "title": frozen["title"], "lang": frozen["lang"],
+            "store_seconds": round(time.monotonic() - t_store, 1),
         }
         sid = store.save_snapshot({
             "market": market, "device": device, "url": url, "manifest": manifest,
