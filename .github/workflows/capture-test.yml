@@ -1,0 +1,45 @@
+name: Capture test
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Page to capture
+        default: https://www.nordicnest.se/
+        required: true
+      devices:
+        description: Devices (comma separated)
+        default: desktop,mobile
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Playwright and Chromium
+        run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+
+      - name: Capture
+        env:
+          HINDSIGHT_BYPASS_HEADER: ${{ secrets.HINDSIGHT_BYPASS_HEADER }}
+        run: python capture/test_capture.py --url "${{ inputs.url }}" --devices "${{ inputs.devices }}" --out results
+
+      - name: Upload screenshots and HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: capture-test
+          path: results/
+          retention-days: 7
