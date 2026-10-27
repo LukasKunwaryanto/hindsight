@@ -1,0 +1,41 @@
+name: Sync API test
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Look back this many days for recent publishes
+        default: "7"
+        required: true
+      full_sync:
+        description: Also measure a full initial sync of the space
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Sync API test
+        env:
+          CONTENTFUL_DELIVERY_TOKEN: ${{ secrets.CONTENTFUL_DELIVERY_TOKEN }}
+        run: |
+          python sync/sync_test.py --days "${{ inputs.days }}" ${{ inputs.full_sync && '' || '--skip-full-sync' }}
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-test
+          path: sync-report.md
+          retention-days: 7
