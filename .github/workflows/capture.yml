@@ -1,0 +1,53 @@
+name: Capture
+
+on:
+  workflow_dispatch:
+    inputs:
+      markets:
+        description: "Markets: 'all' or comma separated locales (sv-SE,de-DE)"
+        default: sv-SE
+        required: true
+      devices:
+        description: Devices (comma separated)
+        default: desktop,mobile
+        required: true
+      reason:
+        description: Why this capture runs (manual, contentful, initial)
+        default: manual
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capture
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: capture/requirements.txt
+
+      - name: Install
+        run: |
+          pip install -r capture/requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Capture and store
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          HINDSIGHT_BYPASS_HEADER: ${{ secrets.HINDSIGHT_BYPASS_HEADER }}
+        run: >
+          python capture/run.py
+          --markets "${{ inputs.markets }}"
+          --devices "${{ inputs.devices }}"
+          --reason "${{ inputs.reason || 'manual' }}"
