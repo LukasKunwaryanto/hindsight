@@ -1,11 +1,9 @@
 name: Apply database migrations
 
-# Applies new files in supabase/migrations to the Supabase project.
-# Runs on every push to main that touches migrations, or by hand.
+# Manual backup only. Normally the Supabase GitHub integration applies new
+# migrations on push to main. Needs SUPABASE_ACCESS_TOKEN, SUPABASE_DB_PASSWORD
+# and SUPABASE_PROJECT_REF as repository secrets.
 on:
-  push:
-    branches: [main]
-    paths: ["supabase/migrations/**"]
   workflow_dispatch:
 
 permissions:
