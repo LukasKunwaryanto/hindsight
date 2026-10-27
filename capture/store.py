@@ -133,10 +133,14 @@ class SupabaseStore:
 
     # --- capture requests ------------------------------------------------------
     def open_request(self, market: str, device: str, reason: str) -> int:
-        rows = self._req("GET", "/rest/v1/capture_requests", params={
-            "select": "id", "market": f"eq.{market}", "device": f"eq.{device}", "status": "in.(waiting,started)"})
-        if rows:
-            rid = rows[0]["id"]
+        """Use the request the poller started for this run, else claim a waiting one, else make one."""
+        for status in ("started", "waiting"):
+            rows = self._req("GET", "/rest/v1/capture_requests", params={
+                "select": "id", "market": f"eq.{market}", "device": f"eq.{device}", "status": f"eq.{status}",
+                "order": "id.desc", "limit": "1"})
+            if rows:
+                rid = rows[0]["id"]
+                break
         else:
             rid = self._insert("capture_requests", [{"market": market, "device": device, "reason": reason}], ret=True)[0]["id"]
         self.update_request(rid, status="started", started_at="now()")

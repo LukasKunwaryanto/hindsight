@@ -19,10 +19,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: capture
-  cancel-in-progress: false
-
 jobs:
   capture:
     runs-on: ubuntu-latest
