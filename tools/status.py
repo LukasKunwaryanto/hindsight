@@ -6,6 +6,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "capture"))
 from store import SupabaseStore  # noqa: E402
 
 db = SupabaseStore(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SECRET_KEY"])
+if len(sys.argv) > 1 and sys.argv[1]:  # test: queue a request that is already due
+    old = "2026-01-01T00:00:00Z"
+    db._insert("capture_requests", [{"market": sys.argv[1], "device": d, "reason": "test", "first_change_at": old,
+                                     "last_change_at": old} for d in ("desktop", "mobile")])
+    print(f"Queued a test capture request for {sys.argv[1]}; the next 5-minute check should start it.")
 q = lambda table, **p: db._req("GET", f"/rest/v1/{table}", params=p) or []
 lines = ["## Hindsight status", ""]
 for s in q("sync_state", select="last_polled_at,last_error"):

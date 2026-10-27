@@ -3,6 +3,11 @@ name: Status
 # Shows when Contentful was last checked, recent startpage changes and capture requests.
 on:
   workflow_dispatch:
+    inputs:
+      test_market:
+        description: "Optional: queue a test capture for this market (e.g. sv-SE)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -19,4 +24,4 @@ jobs:
       - env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
-        run: python tools/status.py
+        run: python tools/status.py "${{ inputs.test_market }}"
