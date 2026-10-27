@@ -86,6 +86,17 @@ def fetch_entries(ids: list[str], chunk: int = 25) -> list[dict]:
     return out
 
 
+# Entries that are pages of their own. The startpage can link to them (a button, a tile),
+# but their content is not shown on the startpage, so the walk stops there.
+PAGE_TYPES = {
+    "start", "productListingPage", "collection", "brand", "designer", "editorial", "room",
+    "rootCategory", "inspiration", "inspirationArticle", "inspirationCategory", "recipe",
+    "storeListing", "store", "search", "checkout", "expresscheckout", "orderConfirmation",
+    "AuthorizationPage", "myPagesProfilePage", "myPagesStartPage", "productConfiguration",
+    "seoInfo", "ContentTag",
+}
+
+
 def walk_tree(max_depth: int = 8):
     """Breadth-first walk from the startpage. Returns entries, asset ids and, per entry,
     the markets (locales) whose startpage reaches it."""
@@ -114,6 +125,8 @@ def walk_tree(max_depth: int = 8):
             e = entries.get(eid)
             if not e:
                 continue
+            if e["sys"]["contentType"]["sys"]["id"] in PAGE_TYPES:
+                continue  # linked page: shown as a link only, don't descend into it
             for field in e.get("fields", {}).values():
                 for typ, child in links_in(field):
                     if typ == "Asset":
