@@ -139,7 +139,8 @@ def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, 
     # header, footer and spacers change for technical reasons; they never make a change "big"
     content = [c for c in changes if c.get("rank") is not None]
     structural = [c for c in content if c["kind"] in ("added", "removed", "replaced")]
-    top = [c for c in content if c["rank"] < TOP_BLOCKS and c["kind"] in ("added", "removed", "replaced", "image")]
+    top = [c for c in content if (c["rank"] < TOP_BLOCKS and c["kind"] in ("added", "removed", "replaced"))
+           or (c["rank"] == 0 and c["kind"] == "image")]
     if not changes:
         size = "none"
     elif top or len(structural) >= MANY:
@@ -160,7 +161,7 @@ def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, 
                  "image": "New hero image" if hero else "New image", "text": "Text edit", "style": "Style tweak",
                  "moved": "Reordered"}
         title = names.get(c["kind"], "Change")
-        others = len([x for x in (content or changes) if x is not c and x["kind"] != "moved"])
+        others = len([x for x in (content or changes) if x is not c and x["kind"] not in ("moved", "style")])
         if others:
             title += f" +{others}"
         d = c.get("detail", {})
