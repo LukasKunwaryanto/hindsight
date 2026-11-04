@@ -42,6 +42,23 @@ FREEZE_JS = r"""() => {
           height: document.documentElement.scrollHeight};
 }"""
 
+PLACEHOLDER_SEL = 'img[src^="data:image/svg+xml"][src*="viewBox=%220%200%20400%20400%22"]'
+PLACEHOLDERS_JS = """async (maxMs) => {
+  const sel = '""" + PLACEHOLDER_SEL.replace("'", "\\'") + """';
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxMs && document.querySelectorAll(sel).length) await new Promise(r => setTimeout(r, 500));
+  return document.querySelectorAll(sel).length;
+}"""
+
+SETTLE_JS = """async (maxMs) => {
+  const t0 = Date.now(); let last = -1, same = 0;
+  while (Date.now() - t0 < maxMs && same < 3) {
+    const n = document.getElementsByTagName('*').length;
+    same = n === last ? same + 1 : 0; last = n;
+    await new Promise(r => setTimeout(r, 500));
+  }
+}"""
+
 WAIT_IMAGES_JS = """async (ms) => {
   const imgs = [...document.images].filter(i => !i.complete);
   await Promise.race([
@@ -91,13 +108,29 @@ async def capture_page(browser, url: str, device: str, locale: str, extra_header
             await page.wait_for_timeout(300)
             height = await page.evaluate("document.body.scrollHeight")
         await page.evaluate("window.scrollTo(0,0)")
+        # Content loaded after scrolling (product carousels) can arrive late when the machine is busy:
+        # wait for the network to go quiet and the page to stop growing before freezing it.
+        try:
+            await page.wait_for_load_state("networkidle", timeout=15_000)
+        except Exception:
+            pass
+        await page.evaluate(SETTLE_JS, 15_000)
+        # Product carousels show grey placeholders until their data arrives: wait for them
+        for _ in range(2):
+            left = await page.evaluate(PLACEHOLDERS_JS, 20_000)
+            if not left:
+                break
+            await page.evaluate(f"document.querySelector('{PLACEHOLDER_SEL}')?.scrollIntoView({{block:'center'}})")
+            await page.wait_for_timeout(1500)
+            await page.evaluate("window.scrollTo(0,0)")
+        placeholders = await page.evaluate(f"document.querySelectorAll('{PLACEHOLDER_SEL}').length")
         not_loaded = await page.evaluate(WAIT_IMAGES_JS, 10_000)
         await page.wait_for_timeout(1500)
         await page.evaluate("document.querySelectorAll('[id^=ccc]').forEach(e => e.remove())")
         frozen = await page.evaluate(FREEZE_JS)
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
-        frozen.update(status=status, resources=resources, images_not_loaded=not_loaded)
+        frozen.update(status=status, resources=resources, images_not_loaded=not_loaded, placeholders=placeholders)
         return frozen
     finally:
         await ctx.close()

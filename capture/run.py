@@ -36,11 +36,29 @@ def make_store(spec: str):
     return SupabaseStore(url, key)
 
 
-async def capture_one(browser, store, market, url, device, reason, rebuild_dir):
-    t0 = time.monotonic()
-    rid = store.open_request(market, device, reason)
+async def capture_one(browser, store, market, url, device, reason, rebuild_dir, slots):
+    async with slots:  # a few pages at a time; saving runs in a thread so pages keep loading meanwhile
+        t0 = time.monotonic()
+        rid = await asyncio.to_thread(store.open_request, market, device, reason)
+        try:
+            frozen = await capture_page(browser, url, device, market, os.environ.get("HINDSIGHT_BYPASS_HEADER"))
+            if frozen.get("placeholders"):  # product data never arrived: try the page once more
+                print(f"{market} {device}: {frozen['placeholders']} placeholders left, capturing again", flush=True)
+                frozen = await capture_page(browser, url, device, market, os.environ.get("HINDSIGHT_BYPASS_HEADER"))
+            return await asyncio.to_thread(finish, store, market, url, device, rid, frozen, t0, rebuild_dir)
+        except Exception as e:
+            traceback.print_exc()
+            try:
+                await asyncio.to_thread(store.update_request, rid, status="failed", finished_at="now()", error=str(e)[:500])
+            except Exception:
+                pass
+            return {"market": market, "device": device, "ok": False, "error": str(e)[:300],
+                    "seconds": round(time.monotonic() - t0, 1)}
+
+
+def finish(store, market, url, device, rid, frozen, t0, rebuild_dir):
+    """Split, store and diff one captured page. Runs in a worker thread."""
     try:
-        frozen = await capture_page(browser, url, device, market, os.environ.get("HINDSIGHT_BYPASS_HEADER"))
         manifest, modules, P = build(frozen, url)
 
         # Prices: keep the first price seen per SKU and market (accuracy not needed)
@@ -69,6 +87,7 @@ async def capture_one(browser, store, market, url, device, reason, rebuild_dir):
         stats = {
             "seconds": round(time.monotonic() - t0, 1), "blocks": len(modules), "cards": len(manifest["cards"]),
             "images": len(frozen["imgs"]), "images_not_loaded": frozen["images_not_loaded"],
+            "placeholders": frozen.get("placeholders", 0),
             "pieces": len(P.blobs), "assets": len(P.assets),
             "new_bytes": {**blob_stats, "assets": asset_bytes}, "title": frozen["title"], "lang": frozen["lang"],
             "store_seconds": round(time.monotonic() - t_store, 1),
@@ -109,6 +128,7 @@ async def main():
     ap.add_argument("--store", default="supabase")
     ap.add_argument("--reason", default="manual")
     ap.add_argument("--rebuild-dir", default=None)
+    ap.add_argument("--parallel", type=int, default=4, help="pages captured at the same time")
     args = ap.parse_args()
 
     store = make_store(args.store)
@@ -117,18 +137,21 @@ async def main():
     chosen = list(all_markets) if args.markets == "all" else [m.strip() for m in args.markets.split(",")]
     devices = [d.strip() for d in args.devices.split(",")]
 
-    results = []
+    results = [{"market": m, "device": "-", "ok": False, "error": "unknown market"} for m in chosen if m not in all_markets]
+    slots = asyncio.Semaphore(max(1, args.parallel))
     async with async_playwright() as p:
         browser = await p.chromium.launch()
-        for market in chosen:
-            if market not in all_markets:
-                results.append({"market": market, "device": "-", "ok": False, "error": "unknown market"})
-                continue
-            for device in devices:
-                r = await capture_one(browser, store, market, all_markets[market], device, args.reason, args.rebuild_dir)
-                print(r, flush=True)
-                results.append(r)
+
+        async def one(market, device):
+            r = await capture_one(browser, store, market, all_markets[market], device, args.reason, args.rebuild_dir, slots)
+            print(r, flush=True)
+            return r
+
+        jobs = [one(m, d) for m in chosen if m in all_markets for d in devices]
+        results += await asyncio.gather(*jobs)
         await browser.close()
+    order = {m: i for i, m in enumerate(chosen)}
+    results.sort(key=lambda r: (order.get(r["market"], 99), r["device"]))
 
     lines = ["## Hindsight captures", "",
              "| Market | Device | Result | Seconds | Blocks | Cards | New KB | Changes | Images not loaded |",
