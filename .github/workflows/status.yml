@@ -8,6 +8,10 @@ on:
         description: "Optional: queue a test capture for this market (e.g. sv-SE)"
         required: false
         default: ""
+      timeline_market:
+        description: "Optional: print this market's desktop timeline (e.g. sv-SE)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -24,4 +28,4 @@ jobs:
       - env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
-        run: python tools/status.py "${{ inputs.test_market }}"
+        run: python tools/status.py "${{ inputs.test_market }}" "${{ inputs.timeline_market }}"

@@ -6,6 +6,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "capture"))
 from store import SupabaseStore  # noqa: E402
 
 db = SupabaseStore(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SECRET_KEY"])
+if len(sys.argv) > 2 and sys.argv[2]:  # print one market's desktop timeline
+    rows = db._req("GET", "/rest/v1/snapshots", params={"select": "id,captured_at,change_size,change_title,change_description",
+                   "market": f"eq.{sys.argv[2]}", "device": "eq.desktop", "order": "captured_at"}) or []
+    for r in rows:
+        ch = db._req("GET", "/rest/v1/snapshot_changes", params={"select": "kind,position,detail->>label,detail->>title,detail->>was",
+                     "snapshot_id": f"eq.{r['id']}", "order": "position"}) or []
+        print(f"{r['captured_at'][:16]} {r['change_size']:6} {r['change_title']} / {r['change_description']}")
+        for c in ch:
+            print(f"      {c['kind']:8} pos {c['position']} {c['label']} | {c['title']} | was {c['was']}")
+    sys.exit(0)
 if len(sys.argv) > 1 and sys.argv[1]:  # test: queue a request that is already due
     old = "2026-01-01T00:00:00Z"
     db._insert("capture_requests", [{"market": sys.argv[1], "device": d, "reason": "test", "first_change_at": old,
