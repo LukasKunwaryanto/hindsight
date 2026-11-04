@@ -121,8 +121,25 @@ class SupabaseStore:
             return None, None
         sid = rows[0]["id"]
         mods = self._req("GET", "/rest/v1/snapshot_modules", params={
-            "select": "position,label,entry_id,blob_hash", "snapshot_id": f"eq.{sid}", "order": "position"})
+            "select": "position,label,entry_id,blob_hash,title", "snapshot_id": f"eq.{sid}", "order": "position"})
         return sid, mods
+
+    def asset_urls(self, hashes: list[str]) -> dict[str, str]:
+        out = {}
+        for i in range(0, len(hashes), 100):
+            rows = self._req("GET", "/rest/v1/assets", params={
+                "select": "hash,source_url", "hash": f"in.({','.join(hashes[i:i + 100])})"})
+            out.update({r["hash"]: r["source_url"] or "" for r in rows or []})
+        return out
+
+    def tree_names(self, ids: list[str]) -> dict[str, str]:
+        """Contentful internal names (the promotion naming convention) for entry IDs."""
+        out = {}
+        for i in range(0, len(ids), 100):
+            rows = self._req("GET", "/rest/v1/tree_entries", params={
+                "select": "entry_id,name", "entry_id": f"in.({','.join(ids[i:i + 100])})"})
+            out.update({r["entry_id"]: r["name"] for r in rows or [] if r.get("name")})
+        return out
 
     def save_snapshot(self, row: dict, modules: list[dict], changes: list[dict]) -> str:
         sid = self._insert("snapshots", [row], ret=True)[0]["id"]
@@ -203,6 +220,12 @@ class MemoryStore:
     def save_card_prices(self, market, prices):
         for s, h in prices.items():
             self.d["prices"].setdefault((market, s), h)
+
+    def tree_names(self, ids):
+        return {}
+
+    def asset_urls(self, hashes):
+        return {h: self.d["assets"][h]["url"] for h in hashes if h in self.d["assets"]}
 
     def latest_snapshot(self, market, device):
         for s in reversed(self.d["snapshots"]):

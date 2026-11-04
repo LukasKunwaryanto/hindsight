@@ -1,0 +1,23 @@
+name: Backfill descriptions
+
+# One-off: adds change size/title/description and block titles to snapshots captured before 4 Nov.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r capture/requirements.txt
+      - env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python tools/backfill_descriptions.py

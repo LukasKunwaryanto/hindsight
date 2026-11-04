@@ -18,7 +18,8 @@ from playwright.async_api import async_playwright  # noqa: E402
 
 from browser import capture_page  # noqa: E402
 from rebuild import data_uri, rebuild  # noqa: E402
-from snapshot import build, diff_modules  # noqa: E402
+from describe import ASSET_RE, describe_changes, module_info
+from snapshot import build  # noqa: E402
 from store import MemoryStore, SupabaseStore  # noqa: E402
 
 FALLBACK_MARKETS = {loc: f"https://www.nordicnest.{tld}/" for loc, tld in [
@@ -82,8 +83,35 @@ def finish(store, market, url, device, rid, frozen, t0, rebuild_dir):
         if new_prices:
             store.save_card_prices(market, new_prices)
 
+        # Readable info per block: headline, and promotion names as the site reports them to GA
+        # (fallback: the Contentful internal name, which follows the same naming convention)
+        reported = {}
+        for pr in frozen.get("promotions") or []:
+            if pr["id"] and pr["name"]:
+                reported.setdefault(pr["id"], pr["name"])
+        texts = {m["blob_hash"]: P.blobs[m["blob_hash"]][1] for m in modules}
+        infos = {m["blob_hash"]: module_info(texts[m["blob_hash"]]) for m in modules}
+        all_ids = sorted({i for inf in infos.values() for i in inf["ids"]})
+        tree = store.tree_names(all_ids) if all_ids else {}
+        for m in modules:
+            inf = infos[m["blob_hash"]]
+            m["title"] = inf["title"]
+            names = [reported[i] for i in inf["ids"] if i in reported]
+            if not names and m.get("entry_id") in tree:
+                names = [tree[m["entry_id"]]]
+            m["promotion_names"] = list(dict.fromkeys(names))
+
         prev_id, prev_mods = store.latest_snapshot(market, device)
-        changes = diff_modules(prev_mods, modules)
+        if prev_mods:
+            missing = [p["blob_hash"] for p in prev_mods if p["blob_hash"] not in texts]
+            texts.update(store.get_blobs(missing) if missing else {})
+            for p in prev_mods:
+                if not p.get("title") and p["blob_hash"] in texts:
+                    p["title"] = module_info(texts[p["blob_hash"]])["title"]
+        hashes = sorted({a for t in texts.values() for a, _ in ASSET_RE.findall(t) if a})
+        urls = {h: a["url"] for h, a in P.assets.items()}
+        urls.update(store.asset_urls([h for h in hashes if h not in urls]))
+        changes, summary = describe_changes(prev_mods, modules, texts, urls)
         stats = {
             "seconds": round(time.monotonic() - t0, 1), "blocks": len(modules), "cards": len(manifest["cards"]),
             "images": len(frozen["imgs"]), "images_not_loaded": frozen["images_not_loaded"],
@@ -94,7 +122,7 @@ def finish(store, market, url, device, rid, frozen, t0, rebuild_dir):
         }
         sid = store.save_snapshot({
             "market": market, "device": device, "url": url, "manifest": manifest,
-            "page_height": frozen["height"], "stats": stats,
+            "page_height": frozen["height"], "stats": stats, **summary,
             "capture_request_id": rid if isinstance(rid, int) else None, "previous_snapshot_id": prev_id,
         }, modules, changes)
         store.update_request(rid, status="done", finished_at="now()")
@@ -110,7 +138,7 @@ def finish(store, market, url, device, rid, frozen, t0, rebuild_dir):
 
         new_total = sum(stats["new_bytes"].values())
         return {"market": market, "device": device, "ok": True, "snapshot": sid, "changes": len(changes),
-                "new_kb": round(new_total / 1024, 1), **{k: stats[k] for k in ("seconds", "blocks", "cards", "images_not_loaded")}}
+                "new_kb": round(new_total / 1024, 1), "summary": f"{summary['change_size']}: {summary['change_title']}", **{k: stats[k] for k in ("seconds", "blocks", "cards", "images_not_loaded")}}
     except Exception as e:
         traceback.print_exc()
         try:

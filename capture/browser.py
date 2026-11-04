@@ -127,10 +127,16 @@ async def capture_page(browser, url: str, device: str, locale: str, extra_header
         not_loaded = await page.evaluate(WAIT_IMAGES_JS, 10_000)
         await page.wait_for_timeout(1500)
         await page.evaluate("document.querySelectorAll('[id^=ccc]').forEach(e => e.remove())")
+        # The site reports every promotion it shows (view_promotion): keep its exact IDs and names
+        promotions = await page.evaluate("""() => (window.dataLayer || [])
+          .filter(e => e && e.event === 'view_promotion' && e.ecommerce)
+          .map(e => ({id: String(e.ecommerce.promotion_id || ''), name: String(e.ecommerce.promotion_name || ''),
+                      creative: String(e.ecommerce.creative_name || '')}))""")
         frozen = await page.evaluate(FREEZE_JS)
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
-        frozen.update(status=status, resources=resources, images_not_loaded=not_loaded, placeholders=placeholders)
+        frozen.update(status=status, resources=resources, images_not_loaded=not_loaded, placeholders=placeholders,
+                      promotions=promotions)
         return frozen
     finally:
         await ctx.close()
