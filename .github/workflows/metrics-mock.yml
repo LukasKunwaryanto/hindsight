@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
     inputs:
       days_back:
-        description: "Days of made-up history before each market's first capture"
-        default: "28"
+        description: "Days of made-up history before each market's first capture (0 = only days with a capture)"
+        default: "0"
         required: true
   schedule:
     - cron: "40 5 * * *"   # daily, so new captures get numbers too
@@ -28,4 +28,4 @@ jobs:
       - env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
-        run: python tools/mock_metrics.py --days-back "${{ inputs.days_back || '28' }}"
+        run: python tools/mock_metrics.py --days-back "${{ inputs.days_back || '0' }}"

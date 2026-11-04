@@ -6,8 +6,8 @@ repeatable numbers into the same tables the BigQuery sync will fill. Rows are ma
 source = 'mock', so the real sync can replace them later without touching the app.
 
 Usage:
-  python tools/mock_metrics.py                 # all markets, from 28 days before the first capture to yesterday
-  python tools/mock_metrics.py --days-back 90  # longer made-up history before the first capture
+  python tools/mock_metrics.py                 # all markets, from each market's first capture to yesterday
+  python tools/mock_metrics.py --days-back 14  # also make up history before the first capture (not used for the demo)
   python tools/mock_metrics.py --dry-run       # print a summary, write nothing
 
 Only numbers our tracking can really provide are generated: promotion views and clicks,
@@ -198,7 +198,8 @@ def upsert(db, table: str, rows: list[dict], keys: str):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--days-back", type=int, default=28, help="made-up history before each market's first capture")
+    ap.add_argument("--days-back", type=int, default=0,
+                    help="made-up history before each market's first capture (0 = only days with a capture)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
@@ -221,6 +222,14 @@ def main():
     print(summary)
     if a.dry_run:
         return
+    # Numbers only for days we have captures for: drop sample rows from before each market's start
+    starts = {}
+    for r in rows["page"]:
+        starts[r["market"]] = min(starts.get(r["market"], r["day"]), r["day"])
+    for market, first_day in starts.items():
+        for table in ("promotion_metrics_daily", "page_metrics_daily", "segment_metrics_daily", "ab_test_metrics_daily"):
+            db._req("DELETE", f"/rest/v1/{table}", headers={"Prefer": "return=minimal"},
+                    params={"market": f"eq.{market}", "day": f"lt.{first_day}", "source": "eq.mock"})
     upsert(db, "promotion_metrics_daily", rows["promotion"], "market,day,entry_id")
     upsert(db, "page_metrics_daily", rows["page"], "market,day")
     upsert(db, "segment_metrics_daily", rows["segment"], "market,day,dimension,value")
