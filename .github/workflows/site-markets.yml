@@ -1,0 +1,26 @@
+name: Site markets
+
+# Lists a site's markets from its hreflang links (used when adding a new site).
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: Start pages, space separated
+        default: "https://www.svenssons.se/ https://www.kitchentime.se/"
+
+permissions:
+  contents: read
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+      - run: python tools/site_markets.py ${{ inputs.urls }}
