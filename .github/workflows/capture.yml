@@ -42,9 +42,9 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
           HINDSIGHT_BYPASS_HEADER: ${{ secrets.HINDSIGHT_BYPASS_HEADER }}
-          # New page format (chunked CSS lists, stable card keys). "1" once the app runs the
-          # matching rebuild.ts (hindsight-app 6c2aaab or later).
-          HINDSIGHT_MANIFEST_V2: "0"
+          # Page format v2 (chunked CSS lists, stable card keys). Readers: capture/rebuild.py and
+          # hindsight-app lib/hindsight/rebuild.ts (6c2aaab or later).
+          HINDSIGHT_MANIFEST_V2: "1"
         run: >
           python capture/run.py
           --markets "${{ inputs.markets }}"
