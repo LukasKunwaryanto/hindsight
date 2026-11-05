@@ -43,4 +43,6 @@ out["asset_mimes"] = dict(m)
 out["days"] = {d: {**v, "markets": len(v["markets"])} for d, v in sorted(day.items())}
 out["snapshots"] = len(snaps)
 out["sizes"] = dict(defaultdict(int, {s: sum(1 for x in snaps if x["change_size"] == s) for s in ("big", "medium", "small", "none")}))
+tree = fetch_all("tree_entries", select="entry_id,fingerprints,fields_null:fields->>sys")
+out["tree"] = {"rows": len(tree), "with_fingerprints": sum(1 for t in tree if t["fingerprints"])}
 print(json.dumps(out, indent=1))
