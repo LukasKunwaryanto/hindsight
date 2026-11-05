@@ -1,0 +1,39 @@
+name: Experiment - Reconstruct from Contentful history
+
+on:
+  workflow_dispatch:
+    inputs:
+      times:
+        description: UTC times to rebuild (space separated)
+        default: "2026-10-28T14:13 2026-10-30T15:17 2026-11-02T15:37"
+
+permissions:
+  contents: read
+
+jobs:
+  reconstruct:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install -r capture/requirements.txt
+          python -m playwright install --with-deps chromium
+      - env:
+          CONTENTFUL_MANAGEMENT_TOKEN: ${{ secrets.CONTENTFUL_MANAGEMENT_TOKEN }}
+          CONTENTFUL_DELIVERY_TOKEN: ${{ secrets.CONTENTFUL_DELIVERY_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python experiments/reconstruct.py ${{ inputs.times }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reconstruct
+          path: |
+            out/recon/**/*.png
+            out/recon/**/compare.json
+            out/recon/summary.json
+          retention-days: 3

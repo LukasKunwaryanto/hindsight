@@ -24,7 +24,19 @@ WIDTH = {"Full": "100%", "Normal": "1376px", "Narrow": "860px"}
 GAP = {"Default": 16, "None": 0, "Small": 8, "Large": 32}
 MARGIN_BOTTOM = 48
 FRACTIONS = {"Half": 1 / 2, "Third": 1 / 3, "Quarter": 1 / 4, "TwoThirds": 2 / 3, "ThreeQuarters": 3 / 4}
-stats = {"blocks": 0, "images": 0, "placeholders": [], "unknown": set()}
+stats = {"blocks": 0, "images": 0, "placeholders": [], "unknown": set(), "borrowed": []}
+BORROW = SRC / "borrowed"  # optional: header.png, footer.png, <entryId>.png cut from a real capture
+
+
+def borrowed(name):
+    p = BORROW / f"{name}.png"
+    if p.exists():
+        stats["borrowed"].append(name)
+        return f'<img class="borrowed" src="data:image/png;base64,{base64.b64encode(p.read_bytes()).decode()}">'
+    return None
+
+
+RENDERED = set()
 
 
 def img_src(aid):
@@ -100,6 +112,7 @@ def block(eid):
     if not e:
         return ""  # unpublished: the site skips it too
     stats["blocks"] += 1
+    RENDERED.add(eid)
     t, f = ct(e), e["fields"]
     mb = f'margin-bottom:{MARGIN_BOTTOM}px;' if f.get("marginBottom") else ""
     width = WIDTH.get(f.get("contentWidth"), "100%")
@@ -122,6 +135,8 @@ def block(eid):
     if t == "editorialBlock":
         body = rich_doc(f["content"]) if isinstance(f.get("content"), dict) else ""
         return f'<div class="layout editorial" style="max-width:{width};{mb}">{body}</div>' if body else ""
+    if t in ("productListBlock", "cevoidBlock") and borrowed(e["sys"]["id"]):
+        return f'<div style="{mb}">{borrowed(e["sys"]["id"])}</div>'
     if t == "productListBlock":
         skus = re.findall(r'"([\w-]+)"', f.get("voyadoElevateProductRules") or "")[: f.get("numberOfProducts") or 8]
         stats["placeholders"].append(f"Product carousel “{f.get('heading')}”: {len(skus)} products named by code only")
@@ -153,10 +168,12 @@ body{{margin:0;font-family:haptik,InterVariable,sans-serif;color:#000;background
 .plh{{text-align:center;font-weight:400;font-size:18px}} .cards{{display:flex;gap:16px}}
 .card{{flex:1;font:12px monospace;color:#999}} .cardimg{{aspect-ratio:3/4;background:#f3f3f3;margin-bottom:6px}}
 .note{{font:13px sans-serif;color:#999;text-align:center}} .editorial{{columns:1;font-size:14px;padding:0 32px}}
-.sitebar{{background:#f3f3f3;color:#888;font:13px sans-serif;text-align:center;padding:14px}}
+img.borrowed{{display:block;width:1440px}} .sitebar{{background:#f3f3f3;color:#888;font:13px sans-serif;text-align:center;padding:14px}}
 </style></head><body>
-<div class="sitebar">Header, menu and top bar — separate site-wide content, not part of the startpage entry</div>
+{borrowed("header") or '<div class="sitebar">Header, menu and top bar — separate site-wide content, not part of the startpage entry</div>'}
 {body}
-<div class="sitebar">Footer — separate site-wide content</div></body></html>"""
+{borrowed("footer") or '<div class="sitebar">Footer — separate site-wide content</div>'}</body></html>"""
 (SRC / "from_contentful.html").write_text(page, encoding="utf-8")
-print(json.dumps({**stats, "unknown": sorted(stats["unknown"])}, ensure_ascii=False, indent=1))
+stats["rendered_ids"] = sorted(RENDERED)
+print(json.dumps({**stats, "unknown": sorted(stats["unknown"]), "rendered_ids": len(RENDERED)}, ensure_ascii=False))
+(SRC / "render_stats.json").write_text(json.dumps({**stats, "unknown": sorted(stats["unknown"])}, ensure_ascii=False))
