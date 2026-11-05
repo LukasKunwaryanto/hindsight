@@ -64,14 +64,16 @@ def _encode_image(raw: bytes, ct: str, width: float | None, mask: bool):
     size = (max(1, round(W * s)), max(1, round(H * s)))
     frames = getattr(im, "n_frames", 1)
     buf = io.BytesIO()
-    if frames > 1:  # animated GIF: keep the animation
+    if frames > 1:  # animated GIF: keep the animation as one animated AVIF
+        # (only what changes between frames is stored: ~4x smaller than animated WebP;
+        # plays in current Chrome, Edge, Firefox and Safari)
         seq, durations = [], []
         for f in range(frames):
             im.seek(f)
             seq.append(im.convert("RGBA").resize(size, Image.LANCZOS))
-            durations.append(im.info.get("duration", 100))
-        seq[0].save(buf, "WEBP", save_all=True, append_images=seq[1:], duration=durations, loop=0, quality=40)
-        return buf.getvalue(), "image/webp", *size
+            durations.append(im.info.get("duration") or 100)
+        seq[0].save(buf, "AVIF", save_all=True, append_images=seq[1:], duration=durations, loop=0, quality=35, speed=6)
+        return buf.getvalue(), "image/avif", *size
     mode = "RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB"
     im.convert(mode).resize(size, Image.LANCZOS).save(buf, "AVIF", quality=35, speed=6)
     return buf.getvalue(), "image/avif", *size
