@@ -63,7 +63,7 @@ for aid, a in assets.items():
     if not f.get("contentType", "").startswith("image/"):
         continue
     w = min(1440, (f.get("details", {}).get("image") or {}).get("width") or 1440)
-    url = "https:" + f["url"] + ("" if f["contentType"] == "image/svg+xml" else f"?w={w}&fm=webp&q=60")
+    url = "https:" + urllib.parse.quote(f["url"], safe="/:%") + ("" if f["contentType"] == "image/svg+xml" else f"?w={w}&fm=webp&q=60")
     try:
         with urllib.request.urlopen(url, timeout=60) as r:
             ext = "svg" if f["contentType"] == "image/svg+xml" else "webp"
