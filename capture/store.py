@@ -147,8 +147,10 @@ class SupabaseStore:
         for i in range(0, len(paths), 50):
             chunk = ",".join(f'"{p}"' for p in paths[i:i + 50])
             rows = self._req("GET", "/rest/v1/assets", params={
-                "select": "hash,mime,source_key", "source_path": f"in.({chunk})"})
-            out.update({r["source_key"]: f"hs-asset:{r['hash']}:{r['mime']}" for r in rows or [] if r.get("source_key")})
+                "select": "hash,mime,source_key", "source_path": f"in.({chunk})", "order": "created_at.asc,hash.asc"})
+            for r in rows or []:  # several files can share a key: always reuse the oldest, so captures agree
+                if r.get("source_key"):
+                    out.setdefault(r["source_key"], f"hs-asset:{r['hash']}:{r['mime']}")
         return out
 
     def asset_urls(self, hashes: list[str]) -> dict[str, str]:
