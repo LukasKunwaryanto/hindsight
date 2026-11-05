@@ -143,8 +143,14 @@ def state_at(eid, T):
         return None, "not_live"
     # published, and no known unpublish since. A later publish or a still-published entry makes it near certain.
     later = [s for s in snaps if ts(s["sys"]["createdAt"]) > T]
-    status = "live" if later or eid in CURRENT_PUBLISHED else "uncertain"
-    return last["snapshot"], status
+    if later or eid in CURRENT_PUBLISHED:
+        return last["snapshot"], "live"
+    # Unpublished today, no record of when. An unpublish moves the entry's "last updated" time, so if the
+    # entry hasn't changed since before T, it was already down at T.
+    cur = cma(f"/environments/{ENV}/entries/{eid}")
+    if cur and ts(cur["sys"]["updatedAt"]) <= T:
+        return None, "not_live"
+    return last["snapshot"], "uncertain"
 
 
 CURRENT_PUBLISHED = set()
@@ -306,6 +312,9 @@ async def main():
         recon_top = [l["sys"]["id"] for l in start_fields.get("content") or [] if l["sys"]["id"] in entries]
         stats = json.loads((folder / "render_stats.json").read_text())
         recon_all = set(stats.get("rendered_ids", []))
+        # spacers have no id in the page's HTML, so they can't be compared; leave them out of the score
+        spacers = {e for e, v in entries.items() if v["sys"]["contentType"]["sys"]["id"] == "spacerBlock"}
+        recon_all -= spacers
         both = real_all & recon_all
         res = {
             "time": T.isoformat(), "real_snapshot": real["id"], "real_captured_at": real["captured_at"],
