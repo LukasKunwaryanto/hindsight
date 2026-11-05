@@ -10,7 +10,7 @@ from store import SupabaseStore  # noqa: E402
 
 db = SupabaseStore(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SECRET_KEY"])
 rows = db._req("GET", "/rest/v1/snapshot_changes", params={
-    "select": "kind,detail", "kind": "in.(style,text)", "order": "id.desc", "limit": os.environ.get("NOISE_LIMIT", "400")}) or []
+    "select": "kind,detail", "kind": "in.(style,text,image)", "order": "id.desc", "limit": os.environ.get("NOISE_LIMIT", "400")}) or []
 pairs = [(r["detail"].get("label"), r["detail"]["before"], r["detail"]["after"]) for r in rows if r["detail"].get("before")]
 texts = db.get_blobs(sorted({h for _, a, b in pairs for h in (a, b)}))
 patterns = Counter()
