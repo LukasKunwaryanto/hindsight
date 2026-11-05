@@ -1,8 +1,9 @@
 name: Capture
 
 on:
-  # Temporary until Contentful changes in the Svenssons and KitchenTime spaces start captures:
-  # both sites twice a day (07:10 and 13:10 Stockholm). Pages that didn't change are not stored.
+  # Temporary until Svenssons has a Contentful delivery key (CONTENTFUL_DELIVERY_TOKEN_SVENSSONS):
+  # Svenssons twice a day (07:10 and 13:10 Stockholm). Pages that didn't change are not stored.
+  # Nordic Nest and KitchenTime are captured when Contentful changes (sync-poll).
   schedule:
     - cron: "10 6,12 * * *"
   workflow_dispatch:
@@ -51,6 +52,6 @@ jobs:
           HINDSIGHT_MANIFEST_V2: "1"
         run: >
           python capture/run.py
-          --markets "${{ inputs.markets || 'site:svenssons,site:kitchentime' }}"
+          --markets "${{ inputs.markets || 'site:svenssons' }}"
           --devices "${{ inputs.devices || 'desktop,mobile' }}"
           --reason "${{ inputs.reason || (github.event_name == 'schedule' && 'scheduled') || 'manual' }}"
