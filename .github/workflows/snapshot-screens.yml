@@ -1,0 +1,38 @@
+name: Snapshot screens
+
+# Screenshots of the newest stored snapshots, rebuilt as the app shows them (a visual check).
+on:
+  workflow_dispatch:
+    inputs:
+      markets:
+        description: Comma separated market ids
+        default: sv-SE
+      devices:
+        default: desktop
+
+permissions:
+  contents: read
+
+jobs:
+  screens:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: capture/requirements.txt
+      - run: |
+          pip install -r capture/requirements.txt
+          python -m playwright install --with-deps chromium
+      - env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python tools/snapshot_screens.py "${{ inputs.markets }}" "${{ inputs.devices }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screens
+          path: screens
+          retention-days: 3
