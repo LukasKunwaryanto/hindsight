@@ -1,10 +1,11 @@
 """Rebuild a stored snapshot into one HTML page. Mirrors what the viewer app will do."""
 import base64
+from html import unescape as html_unescape
 import json
 import re
 
 PH = re.compile(r'<hs-module ref="([0-9a-f]{16})"></hs-module>')
-CARD = re.compile(r'<hs-card i="(\d+)"></hs-card>')
+CARD = re.compile(r'<hs-card (i|k)="([^"]+)"></hs-card>')
 ASSET = re.compile(r"hs-asset:([0-9a-f]{16}):([a-z/+0-9.-]+)")
 
 
@@ -16,13 +17,20 @@ def rebuild(manifest: dict, get_blobs, asset_src) -> str:
         want |= {c["card"], *(b["ref"] for b in c["badges"])} | ({c["price"]} if c.get("price") else set())
     texts = get_blobs(sorted(want))
     rule_keys = json.loads(texts[manifest["ruleset"]])
+    if isinstance(rule_keys, dict):  # v2: list of chunks, each a list of rules
+        chunks = rule_keys["chunks"]
+        texts.update(get_blobs(sorted(set(chunks) - set(texts))))
+        rule_keys = [r for c in chunks for r in json.loads(texts[c])]
     texts.update(get_blobs(sorted(set(rule_keys) - set(texts))))
 
     html = texts[manifest["shell"]]
     cards = manifest.get("cards", [])
+    by_key = {c["key"]: c for c in cards if c.get("key")}
 
     def card_html(m):
-        c = cards[int(m.group(1))]
+        c = cards[int(m.group(2))] if m.group(1) == "i" else by_key.get(html_unescape(m.group(2)))
+        if c is None:
+            return ""
         h = texts[c["card"]]
         h = h.replace('<hs-slot n="price"></hs-slot>', texts.get(c.get("price") or "", ""))
         return h.replace('<hs-slot n="badges"></hs-slot>', "".join(texts[b["ref"]] for b in c["badges"]))

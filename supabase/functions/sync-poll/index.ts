@@ -109,6 +109,33 @@ function stable(v: unknown): string {
   }
   return JSON.stringify(v ?? null);
 }
+/** One short hash per language of an entry's field values: enough to tell which markets changed. */
+async function fingerprints(fields: Row): Promise<Record<string, string>> {
+  const per: Record<string, Row> = {};
+  for (const [k, v] of Object.entries(fields ?? {})) {
+    for (const [loc, val] of Object.entries((v ?? {}) as Row)) (per[loc] ??= {})[k] = val;
+  }
+  const out: Record<string, string> = {};
+  for (const [loc, vals] of Object.entries(per)) {
+    const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(stable(vals)));
+    out[loc] = [...new Uint8Array(d).slice(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return out;
+}
+function changedFingerprints(oldF: Record<string, string>, newF: Record<string, string>): Set<string> {
+  const out = new Set<string>();
+  for (const loc of new Set([...Object.keys(oldF ?? {}), ...Object.keys(newF ?? {})])) if (oldF?.[loc] !== newF?.[loc]) out.add(loc);
+  return out;
+}
+/** Rows written before fingerprints existed: compute them from the stored fields and drop the text. */
+async function slimTree(limit = 50): Promise<number> {
+  const rows: Row[] = await db("GET", `tree_entries?select=entry_id,fields&fingerprints=eq.{}&fields=not.is.null&limit=${limit}`);
+  for (const r of rows) {
+    await db("PATCH", `tree_entries?entry_id=eq.${r.entry_id}`,
+             { fingerprints: await fingerprints(r.fields), ...(r.entry_id === START_ID ? {} : { fields: null }) });
+  }
+  return rows.length;
+}
 function changedLocales(oldF: Row, newF: Row): Set<string> {
   const out = new Set<string>();
   for (const k of new Set([...Object.keys(oldF ?? {}), ...Object.keys(newF ?? {})])) {
@@ -150,11 +177,12 @@ async function rebuildTree(): Promise<number> {
     const missing = todo.filter((id) => !byId.has(id));
     if (missing.length) {  // newly linked entries: fetch and add them to the tree
       const fetched = await fetchEntries(missing);
-      const newRows = fetched.map((e) => {
+      const newRows = await Promise.all(fetched.map(async (e) => {
         const ct = e.sys.contentType.sys.id;
         return { entry_id: e.sys.id, content_type: ct, name: nameOf(e.fields), is_page: PAGE_TYPES.has(ct),
-                 markets: [], fields: e.fields, ...linksOf(e.fields), revision: e.sys.revision, published_at: e.sys.updatedAt };
-      });
+                 markets: [], fields: e.sys.id === START_ID ? e.fields : null, fingerprints: await fingerprints(e.fields),
+                 ...linksOf(e.fields), revision: e.sys.revision, published_at: e.sys.updatedAt };
+      }));
       if (newRows.length) {
         await db("POST", "tree_entries?on_conflict=entry_id", newRows, "return=minimal,resolution=merge-duplicates");
         inserted += newRows.length;
@@ -201,7 +229,7 @@ async function poll(out: Row) {
     const entryItems = items.filter((i) => i.sys.type === "Entry" || i.sys.type === "DeletedEntry");
     const assetItems = items.filter((i) => i.sys.type === "Asset" || i.sys.type === "DeletedAsset");
     const rows = entryItems.length
-      ? await dbGetIn("tree_entries", "entry_id,content_type,name,is_page,markets,fields,links",
+      ? await dbGetIn("tree_entries", "entry_id,content_type,name,is_page,markets,fields,fingerprints,links",
                       "entry_id", [...new Set(entryItems.map((i) => i.sys.id))])
       : [];
     const tree = new Map(rows.map((r) => [r.entry_id, r]));
@@ -221,13 +249,16 @@ async function poll(out: Row) {
         treeChanged = true;
         continue;
       }
-      const locs = changedLocales(r.fields, it.fields);
+      const fp = await fingerprints(it.fields);
+      const locs = Object.keys(r.fingerprints ?? {}).length
+        ? changedFingerprints(r.fingerprints, fp)
+        : changedLocales(r.fields, it.fields);  // row not slimmed yet
       if (!locs.size) continue;  // republished without changes
       const ls = linksOf(it.fields);
       if (stable(ls.links) !== stable([...(r.links ?? [])].sort())) treeChanged = true;
       await db("PATCH", `tree_entries?entry_id=eq.${r.entry_id}`, {
-        fields: it.fields, ...ls, name: nameOf(it.fields), revision: it.sys.revision,
-        published_at: it.sys.updatedAt, updated_at: now,
+        fields: r.entry_id === START_ID ? it.fields : null, fingerprints: fp, ...ls, name: nameOf(it.fields),
+        revision: it.sys.revision, published_at: it.sys.updatedAt, updated_at: now,
       });
       let mk: string[] = [];
       if (r.entry_id === START_ID) mk = [...locs];
@@ -317,6 +348,7 @@ Deno.serve(async (req) => {
   const errors: string[] = [];
   try { await poll(out); } catch (e) { errors.push(String(e)); }
   try { await dispatchDue(out); } catch (e) { errors.push(String(e)); }
+  try { const n = await slimTree(); if (n) out.slimmed = n; } catch (e) { errors.push(String(e)); }
   if (errors.length) {
     out.errors = errors;
     await db("PATCH", `sync_state?space_id=eq.${SPACE}`,

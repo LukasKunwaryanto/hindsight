@@ -56,16 +56,30 @@ def module_info(html: str) -> dict:
     return {"title": title, "ids": list(dict.fromkeys(ids))}
 
 
-def _kind_of_edit(before: str, after: str, asset_urls: dict) -> str:
+CLASS_RE = re.compile(r' class="[^"]*"')
+CARD_RE = re.compile(r'<hs-card [ik]="[^"]+"></hs-card>')
+SITE_PARTS = ("header", "footer", "chrome")
+
+
+def _kind_of_edit(before: str, after: str, asset_urls: dict, label: str = "") -> str:
     """image | text | style, for a block whose HTML changed but kept its identity.
     asset_urls: stored image hash -> original URL, so re-encodes of one picture compare equal."""
+    cards = lambda h: re.findall(r'<hs-card [ik]="([^"]+)"', h)  # in page order
+    if CARD_RE.sub("", before) == CARD_RE.sub("", after) and cards(before) != cards(after):
+        # only product cards moved around inside a carousel (v2 keys by SKU): same products → no change
+        same = sorted(k.split("~")[0] for k in cards(before)) == sorted(k.split("~")[0] for k in cards(after))
+        return "reorder" if same else "products"
+    if label in SITE_PARTS and CLASS_RE.sub("", before) == CLASS_RE.sub("", after):
+        return "state"  # header/bar only switched a styling state (e.g. scrolled), nothing visible changed
     img = lambda h: {image_key(asset_urls.get(a, a)) if a else image_key(b) for a, b in ASSET_RE.findall(h)}
     if img(before) != img(after):
         return "image"
     txt = lambda h: " ".join(_text(lxml.html.fromstring(h)).split()) if h.strip() else ""
     try:
-        if txt(before) != txt(after):
-            return "text"
+        a, b = txt(before), txt(after)
+        if a != b:
+            # only numbers ticked over, e.g. a countdown "6:15" -> "6:14": not an edit
+            return "timer" if re.sub(r"\d", "", a) == re.sub(r"\d", "", b) else "text"
     except Exception:
         return "text"
     return "style"
@@ -126,7 +140,7 @@ def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, 
     for k, m in ck.items():
         p = pk.get(k)
         if p and p["blob_hash"] != m["blob_hash"]:
-            kind = _kind_of_edit(texts.get(p["blob_hash"], ""), texts.get(m["blob_hash"], ""), asset_urls or {})
+            kind = _kind_of_edit(texts.get(p["blob_hash"], ""), texts.get(m["blob_hash"], ""), asset_urls or {}, m["label"])
             changes.append({"kind": kind, "entry_id": m["entry_id"], "position": m["position"], "rank": cr.get(id(m)),
                             "detail": {"label": m["label"], "title": m.get("title", ""), "was": p.get("title", ""),
                                        "before": p["blob_hash"], "after": m["blob_hash"]}})
@@ -136,7 +150,8 @@ def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, 
         changes.append({"kind": "moved", "entry_id": None, "position": None, "rank": None,
                         "detail": {"before": order_prev, "after": order_cur}})
 
-    # header, footer and spacers change for technical reasons; they never make a change "big"
+    # countdowns ticking and header states are not changes; header, footer and spacers never make a change "big"
+    changes = [c for c in changes if c["kind"] not in ("timer", "state", "reorder")]
     content = [c for c in changes if c.get("rank") is not None]
     structural = [c for c in content if c["kind"] in ("added", "removed", "replaced")]
     top = [c for c in content if (c["rank"] < TOP_BLOCKS and c["kind"] in ("added", "removed", "replaced"))
@@ -151,7 +166,7 @@ def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, 
         size = "small"
 
     # the headline change: hero first, then structural, then images, then the rest
-    prio = {"replaced": 0, "added": 1, "removed": 2, "image": 3, "text": 4, "style": 5, "moved": 6}
+    prio = {"replaced": 0, "added": 1, "removed": 2, "image": 3, "text": 4, "products": 5, "style": 6, "moved": 7}
     main = sorted(content or changes, key=lambda c: (prio.get(c["kind"], 9), c.get("rank") if c.get("rank") is not None else 99))
     title, desc = "No visible change", ""
     if main:
@@ -159,6 +174,7 @@ def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, 
         hero = c.get("rank") == 0
         names = {"replaced": "New hero" if hero else "New banner", "added": "Banner added", "removed": "Banner removed",
                  "image": "New hero image" if hero else "New image", "text": "Text edit", "style": "Style tweak",
+                 "products": "Products changed",
                  "moved": "Reordered"}
         title = names.get(c["kind"], "Change")
         others = len([x for x in (content or changes) if x is not c and x["kind"] not in ("moved", "style")])

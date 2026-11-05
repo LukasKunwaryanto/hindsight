@@ -17,6 +17,15 @@ EXT = {"image/avif": "avif", "image/webp": "webp", "image/png": "png", "image/sv
        "image/gif": "gif", "image/jpeg": "jpg", "font/woff2": "woff2", "font/woff": "woff"}
 
 
+def modules_from_manifest(manifest: dict) -> list[dict]:
+    """Every block of a stored page, in order, as module rows (without titles)."""
+    out = []
+    for i, m in enumerate(manifest.get("modules", [])):
+        eid = m["label"][6:] if m["label"].startswith("block:") and m["label"] != "block:anon" else None
+        out.append({"position": i, "label": m["label"], "entry_id": eid, "blob_hash": m["ref"]})
+    return out
+
+
 class SupabaseStore:
     def __init__(self, url: str, key: str):
         self.url = url.rstrip("/")
@@ -96,7 +105,10 @@ class SupabaseStore:
             list(pool.map(upload, new))
         self._insert("assets", [{"hash": h, "mime": assets[h]["mime"], "storage_path": path(h), "width": assets[h]["w"],
                                  "height": assets[h]["h"], "size_bytes": len(assets[h]["bytes"]),
-                                 "source_url": assets[h]["url"][:2000]} for h in new], on_conflict="hash")
+                                 "source_url": assets[h]["url"][:2000],
+                                 "source_key": assets[h].get("source_key"),
+                                 "source_path": (assets[h].get("source_key") or "").split("|")[0] or None}
+                                for h in new], on_conflict="hash")
         return sum(len(assets[h]["bytes"]) for h in new)
 
     def card_prices(self, market: str, skus: list[str]) -> dict[str, str]:
@@ -114,15 +126,24 @@ class SupabaseStore:
 
     # --- snapshots -------------------------------------------------------------
     def latest_snapshot(self, market: str, device: str):
+        """(id, all blocks incl. header/chrome from its manifest, manifest) of the newest snapshot."""
         rows = self._req("GET", "/rest/v1/snapshots", params={
-            "select": "id", "market": f"eq.{market}", "device": f"eq.{device}",
+            "select": "id,manifest", "market": f"eq.{market}", "device": f"eq.{device}",
             "order": "captured_at.desc", "limit": "1"})
         if not rows:
-            return None, None
-        sid = rows[0]["id"]
-        mods = self._req("GET", "/rest/v1/snapshot_modules", params={
-            "select": "position,label,entry_id,blob_hash,title", "snapshot_id": f"eq.{sid}", "order": "position"})
-        return sid, mods
+            return None, None, None
+        return rows[0]["id"], modules_from_manifest(rows[0]["manifest"]), rows[0]["manifest"]
+
+    def known_assets(self, paths: list[str]) -> dict[str, str]:
+        """source_key -> hs-asset ref for files stored before from these source paths."""
+        out = {}
+        paths = sorted({p for p in paths if p and '"' not in p})
+        for i in range(0, len(paths), 50):
+            chunk = ",".join(f'"{p}"' for p in paths[i:i + 50])
+            rows = self._req("GET", "/rest/v1/assets", params={
+                "select": "hash,mime,source_key", "source_path": f"in.({chunk})"})
+            out.update({r["source_key"]: f"hs-asset:{r['hash']}:{r['mime']}" for r in rows or [] if r.get("source_key")})
+        return out
 
     def asset_urls(self, hashes: list[str]) -> dict[str, str]:
         out = {}
@@ -143,7 +164,8 @@ class SupabaseStore:
 
     def save_snapshot(self, row: dict, modules: list[dict], changes: list[dict]) -> str:
         sid = self._insert("snapshots", [row], ret=True)[0]["id"]
-        self._insert("snapshot_modules", [{**m, "snapshot_id": sid} for m in modules])
+        # rows only for content blocks (promotions); the full list is in the manifest
+        self._insert("snapshot_modules", [{**m, "snapshot_id": sid} for m in modules if m.get("entry_id")])
         if changes:
             self._insert("snapshot_changes", [{**c, "snapshot_id": sid, "previous_snapshot_id": row.get("previous_snapshot_id")} for c in changes])
         return sid
@@ -230,8 +252,13 @@ class MemoryStore:
     def latest_snapshot(self, market, device):
         for s in reversed(self.d["snapshots"]):
             if s["row"]["market"] == market and s["row"]["device"] == device:
-                return s["id"], s["modules"]
-        return None, None
+                return s["id"], modules_from_manifest(s["row"]["manifest"]), s["row"]["manifest"]
+        return None, None, None
+
+    def known_assets(self, paths):
+        want = set(paths)
+        return {a["source_key"]: f"hs-asset:{h}:{a['mime']}" for h, a in self.d["assets"].items()
+                if a.get("source_key") and a["source_key"].split("|")[0] in want}
 
     def save_snapshot(self, row, modules, changes):
         sid = f"mem-{len(self.d['snapshots']) + 1}"

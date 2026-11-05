@@ -4,8 +4,12 @@ CSS rules, fonts and banner images. Identical pieces are stored once (named by h
 import gzip
 import io
 import json
+import os
 import re
+import struct
 from urllib.parse import urljoin, urlparse
+
+from html import escape as html_escape
 
 import lxml.html
 from PIL import Image
@@ -15,6 +19,9 @@ from css import class_map, parse_rules, rename_selector
 
 ENTRY_ID_RE = re.compile(r"^[A-Za-z0-9]{20,24}$")
 CARD_PARTS = ("product-card-add-to-wishlist", "product-card-add-to-cart", "stock-status")
+# Manifest v2: stable product-card keys and chunked CSS lists. Readers (rebuild.py and the
+# app's rebuild.ts) understand both; turn on once the app has the reader update.
+WRITE_V2 = os.environ.get("HINDSIGHT_MANIFEST_V2", "1") == "1"
 TRANSPARENT_GIF = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
 
 
@@ -34,10 +41,33 @@ class Pieces:
         self.blobs.setdefault(h, (kind, text))
         return h
 
-    def asset(self, data: bytes, mime: str, url: str, w=None, h=None) -> str:
+    def asset(self, data: bytes, mime: str, url: str, w=None, h=None, source_key=None) -> str:
         key = sha16(data)
-        self.assets.setdefault(key, dict(bytes=data, mime=mime, url=url, w=w, h=h))
+        self.assets.setdefault(key, dict(bytes=data, mime=mime, url=url, w=w, h=h, source_key=source_key))
         return f"hs-asset:{key}:{mime}"
+
+
+def source_path(url: str) -> str:
+    """Identity of a picture: its address without size/resolution options."""
+    return urlparse(url).path.lower() if url else ""
+
+
+def source_key(url: str, width=None, mask=False) -> str:
+    """Same picture shown at the same size = same stored file, whatever variant the browser loaded."""
+    return f"{source_path(url)}|{round(width or 0)}|{'mask' if mask else ''}"
+
+
+def _zero_avif_times(data: bytes) -> bytes:
+    """Animated AVIF stores creation/modification times; zero them so identical input gives identical bytes."""
+    b = bytearray(data)
+    for box in (b"mvhd", b"tkhd", b"mdhd"):
+        i = b.find(box)
+        while i != -1:
+            v = b[i + 4]
+            n = 8 if v == 1 else 4
+            b[i + 8:i + 8 + 2 * n] = bytes(2 * n)
+            i = b.find(box, i + 4)
+    return bytes(b)
 
 
 def _encode_image(raw: bytes, ct: str, width: float | None, mask: bool):
@@ -73,14 +103,16 @@ def _encode_image(raw: bytes, ct: str, width: float | None, mask: bool):
             seq.append(im.convert("RGBA").resize(size, Image.LANCZOS))
             durations.append(im.info.get("duration") or 100)
         seq[0].save(buf, "AVIF", save_all=True, append_images=seq[1:], duration=durations, loop=0, quality=35, speed=6)
-        return buf.getvalue(), "image/avif", *size
+        return _zero_avif_times(buf.getvalue()), "image/avif", *size
     mode = "RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB"
     im.convert(mode).resize(size, Image.LANCZOS).save(buf, "AVIF", quality=35, speed=6)
     return buf.getvalue(), "image/avif", *size
 
 
-def build(frozen: dict, page_url: str) -> tuple[dict, list[dict], Pieces]:
-    """Split a frozen page. Returns (manifest, module rows, pieces)."""
+def build(frozen: dict, page_url: str, known_assets: dict | None = None) -> tuple[dict, list[dict], Pieces]:
+    """Split a frozen page. Returns (manifest, module rows, pieces).
+    known_assets: source_key -> "hs-asset:hash:mime" of files stored before, reused instead of re-encoding."""
+    known_assets = known_assets or {}
     P = Pieces()
     res = frozen["resources"]
     base = f"{urlparse(page_url).scheme}://{urlparse(page_url).netloc}/"
@@ -92,16 +124,19 @@ def build(frozen: dict, page_url: str) -> tuple[dict, list[dict], Pieces]:
             return cache[key]
         raw, ct = res.get(url, (None, ""))
         out = None
-        if raw is None:
+        skey = source_key(url, width, mask)
+        if raw is not None and skey in known_assets:
+            out = known_assets[skey]
+        elif raw is None:
             out = None
         elif "svg" in ct or url.split("?")[0].endswith(".svg"):
-            out = P.asset(raw, "image/svg+xml", url)
+            out = P.asset(raw, "image/svg+xml", url, source_key=skey)
         elif "font" in ct or url.split("?")[0].endswith((".woff2", ".woff", ".ttf")):
-            out = P.asset(raw, ct.split(";")[0] or "font/woff2", url)
+            out = P.asset(raw, ct.split(";")[0] or "font/woff2", url, source_key=skey)
         else:
             enc = _encode_image(raw, ct, width, mask)
             if enc:
-                out = P.asset(enc[0], enc[1], url, enc[2], enc[3])
+                out = P.asset(enc[0], enc[1], url, enc[2], enc[3], source_key=skey)
         cache[key] = out
         return out
 
@@ -141,7 +176,20 @@ def build(frozen: dict, page_url: str) -> tuple[dict, list[dict], Pieces]:
             css = sh["css"] if not sh.get("media") else f"@media {sh['media']}{{{sh['css']}}}"
             for media, sel, body in parse_rules(css):
                 rules.append(P.blob("rule", json.dumps([media, f"{rename_selector(sel, cmap)}{{{fix_css_urls(body, base)}}}"])))
-    ruleset = P.blob("ruleset", json.dumps(rules))
+    if WRITE_V2:
+        # Content-defined chunks (a boundary after rules whose hash ends in "0", ~16 rules each): adding or
+        # removing a rule changes one chunk, not the whole list. Order is kept (it matters for CSS).
+        chunks, cur = [], []
+        for r in rules:
+            cur.append(r)
+            if r[-1] == "0":
+                chunks.append(P.blob("rulechunk", json.dumps(cur)))
+                cur = []
+        if cur:
+            chunks.append(P.blob("rulechunk", json.dumps(cur)))
+        ruleset = P.blob("ruleset", json.dumps({"chunks": chunks}))
+    else:
+        ruleset = P.blob("ruleset", json.dumps(rules))
 
     # --- DOM ---------------------------------------------------------------------
     doc = lxml.html.fromstring(frozen["html"])
@@ -168,6 +216,19 @@ def build(frozen: dict, page_url: str) -> tuple[dict, list[dict], Pieces]:
         if href and href.startswith("/") and not href.startswith("//"):
             el.set("href", urljoin(base, href))
 
+    # Rotating bars (e.g. the USP ticker at the top) are caught on a random message: always store
+    # them with the first message showing, so the bar isn't a "change" every capture.
+    for parent in doc.iter():
+        if not isinstance(parent.tag, str):
+            continue
+        kids = [k for k in parent if isinstance(k.tag, str)]
+        styles = [k.get("style") or "" for k in kids]
+        if len(kids) >= 2 and all("pointer-events" in st for st in styles):
+            if any("pointer-events: auto" in st for st in styles):
+                for j, k in enumerate(kids):
+                    k.set("style", "pointer-events: auto; transform: translateY(0%); opacity: 1;" if j == 0
+                          else "pointer-events: none;")
+
     frag = lambda e: lxml.html.tostring(e, encoding="unicode", with_tail=False)
     elems = lambda e: [k for k in e if isinstance(k.tag, str)]
 
@@ -178,6 +239,7 @@ def build(frozen: dict, page_url: str) -> tuple[dict, list[dict], Pieces]:
 
     # Product cards: stable card + price per SKU + badges per snapshot
     cards = []
+    seen_sku: dict[str, int] = {}
     for i, card in enumerate(doc.xpath('//*[@data-test-id="product-card"]')):
         href = (card.xpath('.//a[@data-test-id="product-link"]/@href') or [""])[0]
         m = re.search(r"variantId=([^&\"]+)", href)
@@ -202,8 +264,15 @@ def build(frozen: dict, page_url: str) -> tuple[dict, list[dict], Pieces]:
                 row.remove(b)
             row.append(lxml.html.fromstring('<hs-slot n="badges"></hs-slot>'))
         card_ref = P.blob("card", frag(card))
-        placeholder(card, f'<hs-card i="{i}"></hs-card>')
-        cards.append({"pos": i + 1, "sku": sku, "card": card_ref, "price": price, "badges": badges})
+        if WRITE_V2:  # keyed by SKU, so products elsewhere on the page don't renumber this block
+            seen_sku[sku] = seen_sku.get(sku, 0) + 1
+            key = f"{sku}~{seen_sku[sku]}"
+            placeholder(card, f'<hs-card k="{html_escape(key)}"></hs-card>')
+        else:
+            key = None
+            placeholder(card, f'<hs-card i="{i}"></hs-card>')
+        cards.append({"pos": i + 1, "sku": sku, "card": card_ref, "price": price, "badges": badges,
+                      **({"key": key} if key else {})})
 
     # Blocks in <main>, plus header, footer and other chrome
     modules = []
@@ -229,7 +298,7 @@ def build(frozen: dict, page_url: str) -> tuple[dict, list[dict], Pieces]:
             cut(c, {"header": "header", "footer": "footer"}.get(c.tag, "chrome"))
 
     shell = P.blob("shell", "<!DOCTYPE html>\n" + lxml.html.tostring(doc, encoding="unicode"))
-    manifest = {"version": 1, "base": base, "shell": shell, "static_css": static, "ruleset": ruleset,
+    manifest = {"version": 2 if WRITE_V2 else 1, "base": base, "shell": shell, "static_css": static, "ruleset": ruleset,
                 "modules": [{"label": m["label"], "ref": m["blob_hash"]} for m in modules], "cards": cards}
     return manifest, modules, P
 
@@ -266,3 +335,13 @@ def diff_modules(prev: list[dict] | None, cur: list[dict]) -> list[dict]:
     if order_prev != order_cur:
         changes.append({"kind": "moved", "entry_id": None, "position": None, "detail": {"before": order_prev, "after": order_cur}})
     return changes
+
+
+def rule_list(ruleset_hash: str, get_blobs) -> list[str]:
+    """The ordered CSS rule references of a stored ruleset, v1 (flat list) or v2 (chunks)."""
+    texts = get_blobs([ruleset_hash])
+    data = json.loads(texts[ruleset_hash])
+    if isinstance(data, dict):
+        chunks = get_blobs(data["chunks"])
+        return [r for c in data["chunks"] for r in json.loads(chunks[c])]
+    return data

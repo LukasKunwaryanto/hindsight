@@ -19,7 +19,7 @@ from playwright.async_api import async_playwright  # noqa: E402
 from browser import capture_page  # noqa: E402
 from rebuild import data_uri, rebuild  # noqa: E402
 from describe import ASSET_RE, describe_changes, module_info
-from snapshot import build  # noqa: E402
+from snapshot import build, source_path  # noqa: E402
 from store import MemoryStore, SupabaseStore  # noqa: E402
 
 FALLBACK_MARKETS = {loc: f"https://www.nordicnest.{tld}/" for loc, tld in [
@@ -60,7 +60,9 @@ async def capture_one(browser, store, market, url, device, reason, rebuild_dir, 
 def finish(store, market, url, device, rid, frozen, t0, rebuild_dir):
     """Split, store and diff one captured page. Runs in a worker thread."""
     try:
-        manifest, modules, P = build(frozen, url)
+        # Images stored before (same picture, same displayed size) are reused, not re-encoded
+        paths = [source_path(u) for u, (_, ct) in frozen["resources"].items() if "image" in ct or "font" in ct]
+        manifest, modules, P = build(frozen, url, store.known_assets(paths))
 
         # Prices: keep the first price seen per SKU and market (accuracy not needed)
         skus = [c["sku"] for c in manifest["cards"] if c.get("price")]
@@ -76,12 +78,6 @@ def finish(store, market, url, device, rid, frozen, t0, rebuild_dir):
         used = {c["price"] for c in manifest["cards"] if c.get("price")}
         for h in [h for h, (k, _) in P.blobs.items() if k == "price" and h not in used]:
             del P.blobs[h]
-
-        t_store = time.monotonic()
-        blob_stats = store.save_blobs(P.blobs)
-        asset_bytes = store.save_assets(P.assets)
-        if new_prices:
-            store.save_card_prices(market, new_prices)
 
         # Readable info per block: headline, and promotion names as the site reports them to GA
         # (fallback: the Contentful internal name, which follows the same naming convention)
@@ -101,7 +97,7 @@ def finish(store, market, url, device, rid, frozen, t0, rebuild_dir):
                 names = [tree[m["entry_id"]]]
             m["promotion_names"] = list(dict.fromkeys(names))
 
-        prev_id, prev_mods = store.latest_snapshot(market, device)
+        prev_id, prev_mods, prev_manifest = store.latest_snapshot(market, device)
         if prev_mods:
             missing = [p["blob_hash"] for p in prev_mods if p["blob_hash"] not in texts]
             texts.update(store.get_blobs(missing) if missing else {})
@@ -112,6 +108,29 @@ def finish(store, market, url, device, rid, frozen, t0, rebuild_dir):
         urls = {h: a["url"] for h, a in P.assets.items()}
         urls.update(store.asset_urls([h for h in hashes if h not in urls]))
         changes, summary = describe_changes(prev_mods, modules, texts, urls)
+
+        # Product badges are stored per snapshot, outside the blocks: a badge change is a change.
+        # (CSS rules alone are not: they also differ when the header is caught in another state.)
+        if prev_manifest:
+            # carousels reshuffle the same products: compare as sets, order doesn't count
+            skus = lambda m: sorted(c["sku"] for c in m.get("cards", []))
+            badges = lambda m: sorted((c["sku"], tuple(b["ref"] for b in c["badges"])) for c in m.get("cards", []))
+            if summary["change_size"] == "none" and badges(prev_manifest) != badges(manifest):
+                what = "Products changed" if skus(prev_manifest) != skus(manifest) else "Product badges"
+                summary = {"change_size": "small", "change_title": what, "change_description": ""}
+                changes.append({"kind": "style", "entry_id": None, "position": None, "detail": {"label": "product cards"}})
+            if summary["change_size"] == "none":
+                # Nothing visible changed: keep the previous snapshot, store nothing new
+                store.update_request(rid, status="done", finished_at="now()")
+                return {"market": market, "device": device, "ok": True, "snapshot": prev_id, "changes": 0, "new_kb": 0,
+                        "summary": "unchanged (not stored)", "seconds": round(time.monotonic() - t0, 1),
+                        "blocks": len(modules), "cards": len(manifest["cards"]), "images_not_loaded": frozen["images_not_loaded"]}
+
+        t_store = time.monotonic()
+        blob_stats = store.save_blobs(P.blobs)
+        asset_bytes = store.save_assets(P.assets)
+        if new_prices:
+            store.save_card_prices(market, new_prices)
         stats = {
             "seconds": round(time.monotonic() - t0, 1), "blocks": len(modules), "cards": len(manifest["cards"]),
             "images": len(frozen["imgs"]), "images_not_loaded": frozen["images_not_loaded"],
