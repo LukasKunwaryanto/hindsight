@@ -100,6 +100,8 @@ def plan(snapshots: list[dict], modules: list[dict], days_back: int, until: date
 
     by_market = defaultdict(list)
     for s in snapshots:
+        if ":" in s["market"]:  # other sites (svenssons:…, kitchentime:…) get no sample numbers
+            continue
         by_market[s["market"]].append(s)
 
     out = {"promotion": [], "page": [], "segment": [], "ab": []}

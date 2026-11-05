@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       markets:
-        description: "Markets: 'all' or comma separated locales (sv-SE,de-DE)"
+        description: "Markets: 'all', comma separated ids (sv-SE,kitchentime:de-DE) or a whole site (site:svenssons,site:kitchentime)"
         default: sv-SE
         required: true
       devices:

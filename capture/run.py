@@ -37,15 +37,16 @@ def make_store(spec: str):
     return SupabaseStore(url, key)
 
 
-async def capture_one(browser, store, market, url, device, reason, rebuild_dir, slots):
+async def capture_one(browser, store, market, url, device, reason, rebuild_dir, slots, lang=None):
     async with slots:  # a few pages at a time; saving runs in a thread so pages keep loading meanwhile
         t0 = time.monotonic()
         rid = await asyncio.to_thread(store.open_request, market, device, reason)
         try:
-            frozen = await capture_page(browser, url, device, market, os.environ.get("HINDSIGHT_BYPASS_HEADER"))
+            lang = lang or market.split(":")[-1]  # 'kitchentime:de-DE' -> 'de-DE'
+            frozen = await capture_page(browser, url, device, lang, os.environ.get("HINDSIGHT_BYPASS_HEADER"))
             if frozen.get("placeholders"):  # product data never arrived: try the page once more
                 print(f"{market} {device}: {frozen['placeholders']} placeholders left, capturing again", flush=True)
-                frozen = await capture_page(browser, url, device, market, os.environ.get("HINDSIGHT_BYPASS_HEADER"))
+                frozen = await capture_page(browser, url, device, lang, os.environ.get("HINDSIGHT_BYPASS_HEADER"))
             return await asyncio.to_thread(finish, store, market, url, device, rid, frozen, t0, rebuild_dir)
         except Exception as e:
             traceback.print_exc()
@@ -180,8 +181,17 @@ async def main():
 
     store = make_store(args.store)
     # The markets table is the source of truth; local tests use the same list hard-coded
-    all_markets = {m["locale"]: m["url"] for m in store.markets()} if hasattr(store, "markets") else FALLBACK_MARKETS
-    chosen = list(all_markets) if args.markets == "all" else [m.strip() for m in args.markets.split(",")]
+    rows = store.markets() if hasattr(store, "markets") else [{"locale": k, "url": v} for k, v in FALLBACK_MARKETS.items()]
+    all_markets = {m["locale"]: m["url"] for m in rows}
+    langs = {m["locale"]: m.get("lang") for m in rows}
+    sites = {m["locale"]: m.get("site") or "nordicnest" for m in rows}
+    # 'all' = every enabled market; 'site:svenssons' = every market of one site; or a list of market ids
+    if args.markets == "all":
+        chosen = list(all_markets)
+    else:
+        chosen = []
+        for m in (x.strip() for x in args.markets.split(",")):
+            chosen += [k for k in all_markets if sites[k] == m[5:]] if m.startswith("site:") else [m]
     devices = [d.strip() for d in args.devices.split(",")]
 
     results = [{"market": m, "device": "-", "ok": False, "error": "unknown market"} for m in chosen if m not in all_markets]
@@ -190,7 +200,8 @@ async def main():
         browser = await p.chromium.launch()
 
         async def one(market, device):
-            r = await capture_one(browser, store, market, all_markets[market], device, args.reason, args.rebuild_dir, slots)
+            r = await capture_one(browser, store, market, all_markets[market], device, args.reason, args.rebuild_dir, slots,
+                                langs.get(market))
             print(r, flush=True)
             return r
 

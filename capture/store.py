@@ -200,7 +200,10 @@ class SupabaseStore:
         self._req("PATCH", "/rest/v1/capture_requests", fields, {"Prefer": "return=minimal"}, params={"id": f"eq.{rid}"})
 
     def markets(self) -> list[dict]:
-        return self._req("GET", "/rest/v1/markets", params={"select": "locale,url", "enabled": "eq.true", "order": "sort_order"})
+        try:
+            return self._req("GET", "/rest/v1/markets", params={"select": "locale,url,lang,site", "enabled": "eq.true", "order": "sort_order"})
+        except Exception:  # database without the site columns yet
+            return self._req("GET", "/rest/v1/markets", params={"select": "locale,url", "enabled": "eq.true", "order": "sort_order"})
 
     # --- reading back (for rebuild checks) -------------------------------------
     def get_blobs(self, hashes: list[str]) -> dict[str, str]:
