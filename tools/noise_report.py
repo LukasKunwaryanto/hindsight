@@ -33,3 +33,16 @@ print("\n--- examples")
 for k, _ in patterns.most_common(8):
     lab, p, q = examples[k]
     print(lab, "\n  A:", repr(p), "\n  B:", repr(q))
+
+# Images that differ: show where each stored file came from
+hs = set()
+for _, a, b in pairs:
+    x, y = texts.get(a, ""), texts.get(b, "")
+    ra, rb = set(re.findall(r"hs-asset:([0-9a-f]{16})", x)), set(re.findall(r"hs-asset:([0-9a-f]{16})", y))
+    hs |= (ra ^ rb)
+if hs:
+    print("\n--- differing images")
+    rows = db._req("GET", "/rest/v1/assets", params={"select": "hash,source_key,width,height,size_bytes,created_at,source_url",
+                                                      "hash": f"in.({','.join(sorted(hs))})", "order": "source_key"}) or []
+    for r in rows:
+        print(r["hash"], r["created_at"][:19], r["width"], r["height"], r["size_bytes"], r["source_key"], "|", (r["source_url"] or "")[-60:])
