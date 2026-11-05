@@ -1,0 +1,30 @@
+name: Experiment - Contentful dump
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install -r capture/requirements.txt
+          python -m playwright install --with-deps chromium
+      - env:
+          CONTENTFUL_DELIVERY_TOKEN: ${{ secrets.CONTENTFUL_DELIVERY_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python experiments/contentful_dump.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contentful-dump
+          path: out/
+          retention-days: 3
