@@ -109,6 +109,12 @@ class SupabaseStore:
                                  "source_key": assets[h].get("source_key"),
                                  "source_path": (assets[h].get("source_key") or "").split("|")[0] or None}
                                 for h in new], on_conflict="hash")
+        # Files stored before source keys existed: fill them in, so the next capture finds them
+        for h in existing:
+            k = assets.get(h, {}).get("source_key")
+            if k:
+                self._req("PATCH", "/rest/v1/assets", {"source_key": k, "source_path": k.split("|")[0]},
+                          {"Prefer": "return=minimal"}, params={"hash": f"eq.{h}", "source_key": "is.null"})
         return sum(len(assets[h]["bytes"]) for h in new)
 
     def card_prices(self, market: str, skus: list[str]) -> dict[str, str]:
