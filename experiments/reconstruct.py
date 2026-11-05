@@ -100,14 +100,16 @@ def snapshots(eid):
 
 def scheduled_unpublishes():
     """entity id -> sorted list of times it was unpublished by a scheduled action."""
-    out, url = {}, f"/scheduled_actions?environment.sys.id={ENV}&sys.status[in]=succeeded&limit=500"
+    out, url = {}, f"/scheduled_actions?environment.sys.id={ENV}&sys.status[in]=succeeded&limit=100"
     while url:
         res = cma(url)
+        if res is None:
+            raise RuntimeError(f"scheduled actions not found: {url}")
         for a in res["items"]:
             if a["action"] == "unpublish":
                 out.setdefault(a["entity"]["sys"]["id"], []).append(ts(a["scheduledFor"]["datetime"]))
         nxt = (res.get("pages") or {}).get("next")
-        url = nxt if nxt and res["items"] else None
+        url = ("https://api.contentful.com" + nxt if nxt and nxt.startswith("/spaces") else nxt) if nxt and res["items"] else None
     return {k: sorted(v) for k, v in out.items()}
 
 
