@@ -120,6 +120,11 @@ def block(eid):
         return f'<div style="height:{f.get("desktopHeight", 0)}px"></div>'
     if t == "layoutBlock":
         kids = [k for k in (link_id(b) for b in f.get("blocks") or []) if k in E]
+        # A layout with fixed columns shows only that many blocks: the first published ones win
+        # (how the team uses slots: line up banners, publish the ones to show).
+        slots = len(re.findall(r"TwoThirds|ThreeQuarters|Half|Third|Quarter", f.get("layout") or ""))
+        if slots and len(kids) > slots:
+            kids = kids[:slots]
         cols = columns(f.get("layout"), len(kids))
         gap = GAP.get(f.get("gap"), 16)
         if len(kids) > len(cols):  # more blocks than the layout's columns: they wrap
