@@ -2,12 +2,19 @@
 // works out which markets' startpages are affected, and starts captures on GitHub once
 // a market has been quiet for 15 minutes (or has waited 60 minutes in total).
 //
-// Secrets: CONTENTFUL_DELIVERY_TOKEN, HINDSIGHT_GITHUB_TOKEN (set in the dashboard).
+// One Contentful space per site. A site is polled once its delivery key is set as a secret and
+// the 'Contentful setup' workflow has run for it. Keep in sync with SITES in sync/sync_test.py.
+// Secrets: the delivery keys below, HINDSIGHT_GITHUB_TOKEN (set in the dashboard).
 // Called with header x-hindsight-cron, checked against a value only the database knows.
 
-const SPACE = "p7vzp7ftmsr1";
-const CF_BASE = `https://cdn.contentful.com/spaces/${SPACE}/environments/master`;
-const START_ID = "6q7zaSZcLXtokLbBepLSgo";
+type Site = { site: string; space: string; start: string; tokenEnv: string; prefix: string };
+const SITES: Site[] = [
+  { site: "nordicnest", space: "p7vzp7ftmsr1", start: "6q7zaSZcLXtokLbBepLSgo", tokenEnv: "CONTENTFUL_DELIVERY_TOKEN", prefix: "" },
+  { site: "kitchentime", space: "ft75u7lxp5jx", start: "30hwuZt1hYaRZfxowVl3Nq", tokenEnv: "CONTENTFUL_DELIVERY_TOKEN_KITCHENTIME", prefix: "kitchentime:" },
+  { site: "svenssons", space: "5dqc39pi2ix6", start: "7xIUJL0SDo8S0otVLWePsx", tokenEnv: "CONTENTFUL_DELIVERY_TOKEN_SVENSSONS", prefix: "svenssons:" },
+];
+const START_IDS = new Set(SITES.map((x) => x.start));
+const tokenOf = (x: Site) => (Deno.env.get(x.tokenEnv) ?? "").trim();
 const REPO = "LukasKunwaryanto/hindsight";
 const WORKFLOW = "capture.yml";
 const DEVICES = ["desktop", "mobile"];
@@ -30,7 +37,6 @@ const SB_KEY = (() => {
   }
   return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 })();
-const CF_TOKEN = (Deno.env.get("CONTENTFUL_DELIVERY_TOKEN") ?? "").trim();
 const GH_TOKEN = (Deno.env.get("HINDSIGHT_GITHUB_TOKEN") ?? "").trim();
 
 type Row = Record<string, any>;
@@ -54,10 +60,10 @@ async function dbGetIn(table: string, select: string, col: string, ids: string[]
 }
 
 // ---------- Contentful ----------
-async function cf(urlOrPath: string): Promise<any> {
-  const url = urlOrPath.startsWith("http") ? urlOrPath : CF_BASE + urlOrPath;
+async function cf(x: Site, urlOrPath: string): Promise<any> {
+  const url = urlOrPath.startsWith("http") ? urlOrPath : `https://cdn.contentful.com/spaces/${x.space}/environments/master${urlOrPath}`;
   for (let attempt = 0; attempt < 4; attempt++) {
-    const r = await fetch(url, { headers: { Authorization: `Bearer ${CF_TOKEN}` } });
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${tokenOf(x)}` } });
     if (r.status === 429) { await new Promise((s) => setTimeout(s, 1500)); continue; }
     const text = await r.text();
     if (!r.ok) throw new Error(`Contentful ${r.status}: ${text.slice(0, 200)}`);
@@ -66,13 +72,13 @@ async function cf(urlOrPath: string): Promise<any> {
   throw new Error("Contentful rate limit");
 }
 
-async function fetchEntries(ids: string[]): Promise<Row[]> {
+async function fetchEntries(x: Site, ids: string[]): Promise<Row[]> {
   const out: Row[] = [];
   let chunk = 20;
   for (let i = 0; i < ids.length;) {
     const part = ids.slice(i, i + chunk);
     try {
-      const res = await cf(`/entries?sys.id[in]=${part.join(",")}&locale=*&include=0&limit=${part.length}`);
+      const res = await cf(x, `/entries?sys.id[in]=${part.join(",")}&locale=*&include=0&limit=${part.length}`);
       out.push(...(res.items ?? []));
       i += part.length;
     } catch (e) {
@@ -132,7 +138,7 @@ async function slimTree(limit = 50): Promise<number> {
   const rows: Row[] = await db("GET", `tree_entries?select=entry_id,fields&fingerprints=eq.{}&fields=not.is.null&limit=${limit}`);
   for (const r of rows) {
     await db("PATCH", `tree_entries?entry_id=eq.${r.entry_id}`,
-             { fingerprints: await fingerprints(r.fields), ...(r.entry_id === START_ID ? {} : { fields: null }) });
+             { fingerprints: await fingerprints(r.fields), ...(START_IDS.has(r.entry_id) ? {} : { fields: null }) });
   }
   return rows.length;
 }
@@ -154,19 +160,35 @@ function nameOf(fields: Row): string {
   return "";
 }
 
-let defaultLocale: string | null = null;
+const defaultLocale = new Map<string, string | null>();
+async function defaultOf(x: Site): Promise<string | null> {
+  if (!defaultLocale.has(x.space)) defaultLocale.set(x.space, (await cf(x, "/locales")).items.find((l: Row) => l.default)?.code ?? null);
+  return defaultLocale.get(x.space)!;
+}
+/** The startpage's block list per market language; a language without its own list shows the default one. */
+async function startContent(x: Site, fields: Row | null): Promise<Record<string, unknown>> {
+  const content: Row = fields?.content ?? {};
+  const langs: string[] = (await db("GET", `markets?select=lang&site=eq.${x.site}`)).map((m: Row) => m.lang).filter(Boolean);
+  if (!langs.length) return content;
+  const def = await defaultOf(x);
+  const out: Record<string, unknown> = {};
+  for (const L of langs) { const v = content[L] ?? (def ? content[def] : undefined); if (v) out[L] = v; }
+  return out;
+}
 
 // ---------- keep the startpage tree current ----------
-async function rebuildTree(): Promise<number> {
-  const rows: Row[] = await db("GET", "tree_entries?select=entry_id,content_type,links,markets");
+async function rebuildTree(x: Site): Promise<number> {
+  const START_ID = x.start;
+  const rows: Row[] = await db("GET", `tree_entries?select=entry_id,content_type,links,markets&space_id=eq.${x.space}`);
   const byId = new Map(rows.map((r) => [r.entry_id, r]));
   const [start] = await db("GET", `tree_entries?select=fields&entry_id=eq.${START_ID}`);
+  const content = await startContent(x, start?.fields);
   const marketsOf = new Map<string, Set<string>>();
   const add = (id: string, locs: Iterable<string>) => {
     const s = marketsOf.get(id) ?? new Set<string>(); for (const l of locs) s.add(l); marketsOf.set(id, s);
   };
   let frontier: string[] = [];
-  for (const [loc, blocks] of Object.entries(start?.fields?.content ?? {})) {
+  for (const [loc, blocks] of Object.entries(content)) {
     const e = new Set<string>(); linksIn(blocks, e, new Set());
     for (const id of e) { add(id, [loc]); frontier.push(id); }
   }
@@ -176,10 +198,10 @@ async function rebuildTree(): Promise<number> {
     const todo = [...new Set(frontier)].filter((id) => !visited.has(id));
     const missing = todo.filter((id) => !byId.has(id));
     if (missing.length) {  // newly linked entries: fetch and add them to the tree
-      const fetched = await fetchEntries(missing);
+      const fetched = await fetchEntries(x, missing);
       const newRows = await Promise.all(fetched.map(async (e) => {
         const ct = e.sys.contentType.sys.id;
-        return { entry_id: e.sys.id, content_type: ct, name: nameOf(e.fields), is_page: PAGE_TYPES.has(ct),
+        return { entry_id: e.sys.id, space_id: x.space, content_type: ct, name: nameOf(e.fields), is_page: PAGE_TYPES.has(ct),
                  markets: [], fields: e.sys.id === START_ID ? e.fields : null, fingerprints: await fingerprints(e.fields),
                  ...linksOf(e.fields), revision: e.sys.revision, published_at: e.sys.updatedAt };
       }));
@@ -198,7 +220,7 @@ async function rebuildTree(): Promise<number> {
     }
     frontier = next;
   }
-  marketsOf.set(START_ID, new Set(Object.keys(start?.fields?.content ?? {})));
+  marketsOf.set(START_ID, new Set(Object.keys(content)));
   // save markets that changed (entries no longer reachable get none)
   for (const [id, r] of byId) {
     const want = [...(marketsOf.get(id) ?? [])].sort();
@@ -210,14 +232,16 @@ async function rebuildTree(): Promise<number> {
 }
 
 // ---------- 1. read changes from Contentful ----------
-async function poll(out: Row) {
+async function poll(x: Site, out: Row) {
+  const START_ID = x.start;
+  const SPACE = x.space;
   const [state] = await db("GET", `sync_state?select=next_sync_url&space_id=eq.${SPACE}`);
   if (!state?.next_sync_url) { out.note = "Not set up yet: run the 'Contentful setup' workflow on GitHub once."; return; }
 
   const items: Row[] = [];
   let url: string = state.next_sync_url, nextSync = "";
   for (let page = 0; page < 50; page++) {
-    const res = await cf(url);
+    const res = await cf(x, url);
     items.push(...(res.items ?? []));
     if (res.nextPageUrl) url = res.nextPageUrl; else { nextSync = res.nextSyncUrl; break; }
   }
@@ -225,12 +249,13 @@ async function poll(out: Row) {
   out.items = items.length;
 
   if (items.length) {
-    if (!defaultLocale) defaultLocale = (await cf("/locales")).items.find((l: Row) => l.default)?.code ?? null;
+    const def = await defaultOf(x);
+    const marketId = (loc: string) => x.prefix + loc;  // tree_entries.markets holds languages; markets are per site
     const entryItems = items.filter((i) => i.sys.type === "Entry" || i.sys.type === "DeletedEntry");
     const assetItems = items.filter((i) => i.sys.type === "Asset" || i.sys.type === "DeletedAsset");
     const rows = entryItems.length
-      ? await dbGetIn("tree_entries", "entry_id,content_type,name,is_page,markets,fields,fingerprints,links",
-                      "entry_id", [...new Set(entryItems.map((i) => i.sys.id))])
+      ? await dbGetIn("tree_entries", "entry_id,space_id,content_type,name,is_page,markets,fields,fingerprints,links",
+                      "entry_id", [...new Set(entryItems.map((i) => i.sys.id))]).then((rs) => rs.filter((r) => r.space_id === SPACE))
       : [];
     const tree = new Map(rows.map((r) => [r.entry_id, r]));
     const hit = new Set<string>();
@@ -243,8 +268,8 @@ async function poll(out: Row) {
       const now = new Date().toISOString();
       if (it.sys.type === "DeletedEntry") {
         changes.push({ entry_id: r.entry_id, content_type: r.content_type, name: r.name, change_type: "unpublish",
-                       markets: r.is_page ? [] : r.markets, published_at: it.sys.deletedAt ?? now });
-        if (!r.is_page) r.markets.forEach((m: string) => hit.add(m));
+                       markets: r.is_page ? [] : r.markets.map(marketId), published_at: it.sys.deletedAt ?? now });
+        if (!r.is_page) r.markets.forEach((m: string) => hit.add(marketId(m)));
         await db("DELETE", `tree_entries?entry_id=eq.${r.entry_id}`);
         treeChanged = true;
         continue;
@@ -261,8 +286,8 @@ async function poll(out: Row) {
         revision: it.sys.revision, published_at: it.sys.updatedAt, updated_at: now,
       });
       let mk: string[] = [];
-      if (r.entry_id === START_ID) mk = [...locs];
-      else if (!r.is_page) mk = defaultLocale && locs.has(defaultLocale) ? r.markets : r.markets.filter((m: string) => locs.has(m));
+      if (!r.is_page || r.entry_id === START_ID) mk = def && locs.has(def) ? r.markets : r.markets.filter((m: string) => locs.has(m));
+      mk = mk.map(marketId);
       mk.forEach((m) => hit.add(m));
       changes.push({ entry_id: r.entry_id, content_type: r.content_type, name: nameOf(it.fields),
                      change_type: "publish", markets: mk, published_at: it.sys.updatedAt });
@@ -271,11 +296,11 @@ async function poll(out: Row) {
     if (assetItems.length) {  // an image replaced inside an asset the startpage uses
       const ids = [...new Set(assetItems.map((i) => i.sys.id))];
       const users: Row[] = await db("GET",
-        `tree_entries?select=entry_id,markets,is_page,asset_ids&asset_ids=ov.${encodeURIComponent(`{${ids.join(",")}}`)}`);
+        `tree_entries?select=entry_id,markets,is_page,asset_ids&space_id=eq.${SPACE}&asset_ids=ov.${encodeURIComponent(`{${ids.join(",")}}`)}`);
       for (const a of assetItems) {
         const mk = new Set<string>();
         for (const u of users) {
-          if (!u.is_page && u.asset_ids.includes(a.sys.id)) u.markets.forEach((m: string) => mk.add(m));
+          if (!u.is_page && u.asset_ids.includes(a.sys.id)) u.markets.forEach((m: string) => mk.add(marketId(m)));
         }
         if (!mk.size) continue;
         mk.forEach((m) => hit.add(m));
@@ -285,7 +310,7 @@ async function poll(out: Row) {
       }
     }
 
-    if (treeChanged) out.new_tree_entries = await rebuildTree();
+    if (treeChanged) out.new_tree_entries = await rebuildTree(x);
     if (changes.length) await db("POST", "content_changes", changes);
     out.changes = changes.length;
 
@@ -346,13 +371,17 @@ Deno.serve(async (req) => {
 
   const out: Row = {};
   const errors: string[] = [];
-  try { await poll(out); } catch (e) { errors.push(String(e)); }
+  for (const x of SITES) {
+    if (!tokenOf(x)) continue;  // no delivery key for this site yet
+    const o: Row = (out[x.site] = {});
+    try { await poll(x, o); } catch (e) {
+      errors.push(`${x.site}: ${e}`);
+      await db("PATCH", `sync_state?space_id=eq.${x.space}`,
+               { last_error: String(e).slice(0, 1000), last_polled_at: new Date().toISOString() }).catch(() => {});
+    }
+  }
   try { await dispatchDue(out); } catch (e) { errors.push(String(e)); }
   try { const n = await slimTree(); if (n) out.slimmed = n; } catch (e) { errors.push(String(e)); }
-  if (errors.length) {
-    out.errors = errors;
-    await db("PATCH", `sync_state?space_id=eq.${SPACE}`,
-             { last_error: errors.join(" | ").slice(0, 1000), last_polled_at: new Date().toISOString() }).catch(() => {});
-  }
+  if (errors.length) out.errors = errors;
   return new Response(JSON.stringify(out), { status: errors.length ? 500 : 200, headers: { "Content-Type": "application/json" } });
 });

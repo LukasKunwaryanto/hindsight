@@ -19,11 +19,18 @@ import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
-SPACE = "p7vzp7ftmsr1"           # Nordic Nest
+# One Contentful space per site: (space, startpage entry, secret holding its delivery key, market id prefix).
+# Keep in sync with SITES in supabase/functions/sync-poll/index.ts.
+SITES = {
+    "nordicnest":  ("p7vzp7ftmsr1", "6q7zaSZcLXtokLbBepLSgo", "CONTENTFUL_DELIVERY_TOKEN", ""),
+    "kitchentime": ("ft75u7lxp5jx", "30hwuZt1hYaRZfxowVl3Nq", "CONTENTFUL_DELIVERY_TOKEN_KITCHENTIME", "kitchentime:"),
+    "svenssons":   ("5dqc39pi2ix6", "7xIUJL0SDo8S0otVLWePsx", "CONTENTFUL_DELIVERY_TOKEN_SVENSSONS", "svenssons:"),
+}
+SITE = os.environ.get("HINDSIGHT_SITE", "nordicnest")
+SPACE, START_ID, TOKEN_ENV, MARKET_PREFIX = SITES[SITE]
 ENV = "master"
-START_ID = "6q7zaSZcLXtokLbBepLSgo"  # startpage entry
 BASE = f"https://cdn.contentful.com/spaces/{SPACE}/environments/{ENV}"
-TOKEN = os.environ.get("CONTENTFUL_DELIVERY_TOKEN", "").strip()
+TOKEN = os.environ.get(TOKEN_ENV, "").strip()
 
 
 def get(path_or_url: str, params: dict | None = None, too_big_ok: bool = False) -> dict:
@@ -97,7 +104,16 @@ PAGE_TYPES = {
 }
 
 
-def walk_tree(max_depth: int = 8):
+def start_content(start: dict, langs: list[str] | None = None, default: str | None = None) -> dict:
+    """The startpage's block list per language. A language without its own list shows the
+    default language's list (Contentful fallback), e.g. KitchenTime's da-DK, de-DE, fi-FI."""
+    content = start["fields"].get("content", {})
+    if not langs:
+        return content
+    return {L: content.get(L, content.get(default)) for L in langs if content.get(L, content.get(default))}
+
+
+def walk_tree(max_depth: int = 8, langs: list[str] | None = None, default: str | None = None):
     """Breadth-first walk from the startpage. Returns entries, asset ids and, per entry,
     the markets (locales) whose startpage reaches it."""
     entries, assets = {}, set()
@@ -108,7 +124,7 @@ def walk_tree(max_depth: int = 8):
     entries[START_ID] = start[0]
     # markets: the startpage's own per-locale content lists
     frontier = []
-    for locale, blocks in start[0]["fields"].get("content", {}).items():
+    for locale, blocks in start_content(start[0], langs, default).items():
         for typ, eid in links_in(blocks):
             if typ == "Entry":
                 markets_of[eid].add(locale)

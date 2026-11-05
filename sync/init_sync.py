@@ -5,7 +5,8 @@
 2. Walks the startpage tree and stores its ~800 entries with the markets each one
    appears in, so the poller can tell which markets an edit affects.
 
-Env: CONTENTFUL_DELIVERY_TOKEN, SUPABASE_URL, SUPABASE_SECRET_KEY.
+Env: HINDSIGHT_SITE (nordicnest, kitchentime, svenssons), that site's delivery key
+(see SITES in sync_test.py), SUPABASE_URL, SUPABASE_SECRET_KEY.
 """
 import os
 import sys
@@ -14,13 +15,17 @@ import time
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "capture"))
 from store import SupabaseStore  # noqa: E402
-from sync_test import PAGE_TYPES, SPACE, START_ID, TOKEN, entry_name, full_initial_sync, links_in, walk_tree  # noqa: E402
+from sync_test import (PAGE_TYPES, SITE, SPACE, START_ID, TOKEN, TOKEN_ENV, entry_name, full_initial_sync,  # noqa: E402
+                       get, links_in, start_content, walk_tree)
 
 
 def main():
     if not TOKEN:
-        raise SystemExit("CONTENTFUL_DELIVERY_TOKEN is not set.")
+        raise SystemExit(f"{TOKEN_ENV} is not set (GitHub → Settings → Secrets and variables → Actions).")
     db = SupabaseStore(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SECRET_KEY"])
+    # the site's market languages; a language without its own startpage content shows the default one
+    langs = [m["lang"] for m in db._req("GET", "/rest/v1/markets", params={"select": "lang", "site": f"eq.{SITE}"})]
+    default = next((l["code"] for l in get("/locales").get("items", []) if l.get("default")), None)
 
     # Position first, tree second: anything published in between shows up again
     # in the first poll, which is harmless.
@@ -30,8 +35,8 @@ def main():
         raise SystemExit(f"Initial sync did not finish: {s}")
     print(f"Initial sync: {s['pages']} pages, {s['mb']:.0f} MB, {s['seconds']} s")
 
-    entries, _assets, markets_of, depth = walk_tree()
-    start_markets = sorted(entries[START_ID]["fields"].get("content", {}).keys())
+    entries, _assets, markets_of, depth = walk_tree(langs=langs, default=default)
+    start_markets = sorted(start_content(entries[START_ID], langs, default).keys())
     rows = []
     for eid, e in entries.items():
         links, assets = set(), set()
@@ -39,13 +44,13 @@ def main():
             (links if typ == "Entry" else assets if typ == "Asset" else set()).add(child)
         ct = e["sys"]["contentType"]["sys"]["id"]
         rows.append({
-            "entry_id": eid, "content_type": ct, "name": entry_name(e), "is_page": ct in PAGE_TYPES and eid != START_ID,
+            "entry_id": eid, "space_id": SPACE, "content_type": ct, "name": entry_name(e), "is_page": ct in PAGE_TYPES and eid != START_ID,
             "markets": start_markets if eid == START_ID else sorted(markets_of.get(eid, set())),
             "fields": e.get("fields", {}), "links": sorted(links), "asset_ids": sorted(assets),
             "revision": e["sys"].get("revision"), "published_at": e["sys"].get("updatedAt"),
         })
 
-    db._req("DELETE", "/rest/v1/tree_entries", headers={"Prefer": "return=minimal"}, params={"entry_id": "not.is.null"})
+    db._req("DELETE", "/rest/v1/tree_entries", headers={"Prefer": "return=minimal"}, params={"space_id": f"eq.{SPACE}"})
     for i in range(0, len(rows), 50):
         db._insert("tree_entries", rows[i:i + 50])
     db._insert("sync_state", [{"space_id": SPACE, "next_sync_url": s["next_sync"], "last_error": None,
@@ -54,7 +59,7 @@ def main():
     db._req("PATCH", "/rest/v1/sync_state", {"next_sync_url": s["next_sync"], "last_error": None},
             {"Prefer": "return=minimal"}, params={"space_id": f"eq.{SPACE}"})
 
-    md = (f"## Contentful setup\n\nStored {len(rows)} startpage entries ({depth} levels) for "
+    md = (f"## Contentful setup: {SITE}\n\nStored {len(rows)} startpage entries ({depth} levels) for "
           f"{len(start_markets)} markets and a sync position. Took {time.monotonic() - t0:.0f} s.\n"
           f"Automatic captures are now active.\n")
     print(md)
