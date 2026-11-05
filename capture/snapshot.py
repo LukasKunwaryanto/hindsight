@@ -201,6 +201,13 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None) -> tupl
             continue
         if el.get("class"):
             el.set("class", " ".join(sorted(cmap.get(c, c) for c in el.get("class").split())))
+        if el.tag == "img" and el.get("style"):
+            # fade-in leftovers: "opacity: 1" is the default, and only present if the fade finished
+            st = re.sub(r"(^|;)\s*opacity:\s*1\s*(?=;|$)", r"\1", el.get("style")).strip(" ;")
+            if st:
+                el.set("style", st + ";")
+            else:
+                del el.attrib["style"]
         if el.tag == "img" and el.get("data-hs-id") in imgs:
             info = imgs[el.get("data-hs-id")]
             src = info["src"]
