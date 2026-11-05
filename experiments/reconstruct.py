@@ -37,6 +37,10 @@ PAGE_TYPES = {"productListingPage", "collection", "brand", "designer", "editoria
 ts = lambda s: datetime.fromisoformat(s.replace("Z", "+00:00"))
 
 
+class TooBig(Exception):
+    pass
+
+
 def cma(path_or_url, **params):
     url = path_or_url if path_or_url.startswith("http") else CMA + path_or_url
     if params:
@@ -51,7 +55,10 @@ def cma(path_or_url, **params):
                 time.sleep(float(e.headers.get("X-Contentful-RateLimit-Reset", 1)) + 0.5); continue
             if e.code == 404:
                 return None
-            raise RuntimeError(f"CMA {e.code} {url.split('?')[0]}: {e.read()[:200]}")
+            body = e.read()
+            if e.code == 400 and b"Response size too big" in body:
+                raise TooBig()
+            raise RuntimeError(f"CMA {e.code} {url.split('?')[0]}: {body[:200]}")
     raise RuntimeError("rate limited")
 
 
@@ -87,12 +94,17 @@ _snaps = {}
 def snapshots(eid):
     """All publish snapshots of an entry, oldest first (None if the entry no longer exists)."""
     if eid not in _snaps:
-        items, skip = [], 0
+        items, skip, limit = [], 0, 100
         while True:
-            res = cma(f"/environments/{ENV}/entries/{eid}/snapshots", limit=100, skip=skip)
+            try:
+                res = cma(f"/environments/{ENV}/entries/{eid}/snapshots", limit=limit, skip=skip)
+            except TooBig:
+                if limit == 1:
+                    raise
+                limit = max(1, limit // 2); continue
             if res is None:
                 _snaps[eid] = None; break
-            items += res["items"]; skip += 100
+            items += res["items"]; skip += len(res["items"])
             if skip >= res.get("total", 0):
                 _snaps[eid] = sorted(items, key=lambda s: s["sys"]["createdAt"]); break
     return _snaps[eid]
