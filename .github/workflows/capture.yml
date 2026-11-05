@@ -1,6 +1,10 @@
 name: Capture
 
 on:
+  # Temporary until Contentful changes in the Svenssons and KitchenTime spaces start captures:
+  # both sites twice a day (07:10 and 13:10 Stockholm). Pages that didn't change are not stored.
+  schedule:
+    - cron: "10 6,12 * * *"
   workflow_dispatch:
     inputs:
       markets:
@@ -47,6 +51,6 @@ jobs:
           HINDSIGHT_MANIFEST_V2: "1"
         run: >
           python capture/run.py
-          --markets "${{ inputs.markets }}"
-          --devices "${{ inputs.devices }}"
-          --reason "${{ inputs.reason || 'manual' }}"
+          --markets "${{ inputs.markets || 'site:svenssons,site:kitchentime' }}"
+          --devices "${{ inputs.devices || 'desktop,mobile' }}"
+          --reason "${{ inputs.reason || (github.event_name == 'schedule' && 'scheduled') || 'manual' }}"
