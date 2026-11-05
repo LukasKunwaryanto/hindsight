@@ -23,8 +23,8 @@ if len(sys.argv) > 1 and sys.argv[1]:  # test: queue a request that is already d
     print(f"Queued a test capture request for {sys.argv[1]}; the next 5-minute check should start it.")
 q = lambda table, **p: db._req("GET", f"/rest/v1/{table}", params=p) or []
 lines = ["## Hindsight status", ""]
-for s in q("sync_state", select="last_polled_at,last_error"):
-    lines += [f"**Last Contentful check:** {s['last_polled_at']}  ", f"**Last error:** {s['last_error'] or 'none'}", ""]
+for s in q("sync_state", select="space_id,last_polled_at,last_error"):
+    lines += [f"**Last Contentful check ({s['space_id']}):** {s['last_polled_at']}  ", f"**Last error:** {s['last_error'] or 'none'}", ""]
 lines += ["### Recent startpage changes", "", "| Detected | Type | Name | Change | Markets |", "| --- | --- | --- | --- | --- |"]
 for c in q("content_changes", select="detected_at,content_type,name,change_type,markets", order="id.desc", limit="15"):
     lines.append(f"| {c['detected_at'][:16]} | {c['content_type']} | {c['name']} | {c['change_type']} | {', '.join(c['markets'])} |")
