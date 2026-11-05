@@ -201,13 +201,11 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None) -> tupl
             continue
         if el.get("class"):
             el.set("class", " ".join(sorted(cmap.get(c, c) for c in el.get("class").split())))
-        if el.tag == "img" and el.get("style"):
-            # fade-in leftovers: "opacity: 1" is the default, and only present if the fade finished
-            st = re.sub(r"(^|;)\s*opacity:\s*1\s*(?=;|$)", r"\1", el.get("style")).strip(" ;")
-            if st:
-                el.set("style", st + ";")
-            else:
-                del el.attrib["style"]
+        if el.tag == "img":
+            # The site fades images in from opacity 0 (its CSS) to an inline "opacity: 1". Always store
+            # them fully shown, whether or not the fade had finished when the page was frozen.
+            st = re.sub(r"(^|;)\s*opacity:\s*[\d.]+\s*(?=;|$)", r"\1", el.get("style") or "").strip(" ;")
+            el.set("style", (st + "; " if st else "") + "opacity: 1;")
         if el.tag == "img" and el.get("data-hs-id") in imgs:
             info = imgs[el.get("data-hs-id")]
             src = info["src"]

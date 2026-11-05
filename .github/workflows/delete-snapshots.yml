@@ -1,0 +1,26 @@
+name: Delete snapshots since
+
+# Repair tool: removes snapshots captured at or after a time, e.g. after a faulty capture version.
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: UTC time, e.g. 2026-11-05T14:21:00Z
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python tools/delete_snapshots_since.py "${{ inputs.since }}"
