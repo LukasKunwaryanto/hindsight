@@ -1,0 +1,31 @@
+name: Page inventory
+
+# Counts every page per site and market from the sitemaps (for storage estimates).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  count:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: >
+          python tools/page_inventory.py
+          www.nordicnest.se www.nordicnest.com www.nordicnest.de www.nordicnest.no www.nordicnest.dk www.nordicnest.fi
+          www.nordicnest.nl www.nordicnest.fr www.nordicnest.es www.nordicnest.it www.nordicnest.pl www.nordicnest.pt
+          www.nordicnest.gr www.nordicnest.jp www.nordicnest.kr www.nordicnest.cn
+          www.svenssons.se www.svenssons.no
+          www.kitchentime.se www.kitchentime.no www.kitchentime.dk www.kitchentime.fi www.kitchentime.de www.kitchentime.com
+          > inventory.txt; tail -c 300 inventory.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inventory
+          path: inventory.txt
+          retention-days: 3
