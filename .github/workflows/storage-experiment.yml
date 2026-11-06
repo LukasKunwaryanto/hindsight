@@ -1,0 +1,58 @@
+name: Storage experiment
+
+# Captures a sample of every page type into a local test store (not Supabase) and records what each
+# capture adds, for yearly storage estimates. Pass 'continue_run' to capture the same pages again on
+# top of an earlier run's store (shows what changes over time).
+on:
+  workflow_dispatch:
+    inputs:
+      continue_run:
+        description: Run id of an earlier storage experiment to continue (empty = fresh start)
+        default: ""
+      repeat_after_minutes:
+        description: Capture everything a second time after this many minutes (0 = once)
+        default: "20"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: capture/requirements.txt
+      - run: |
+          pip install -r capture/requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Earlier store
+        if: inputs.continue_run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ inputs.continue_run }}" -n storage-experiment -D prev -R "${{ github.repository }}"
+          cp prev/store.pkl store.pkl; cp prev/results.jsonl results.jsonl
+      - name: Capture
+        env:
+          HINDSIGHT_MANIFEST_V2: "1"
+        run: |
+          label=$([ -n "${{ inputs.continue_run }}" ] && echo "later-$(date -u +%H%M)" || echo first)
+          python tools/sample_storage.py --store store.pkl --label "$label"
+          if [ "${{ inputs.repeat_after_minutes }}" != "0" ]; then
+            sleep $(( ${{ inputs.repeat_after_minutes }} * 60 ))
+            python tools/sample_storage.py --store store.pkl --label "$label-plus${{ inputs.repeat_after_minutes }}m"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: storage-experiment
+          path: |
+            store.pkl
+            results.jsonl
+          retention-days: 7
