@@ -365,9 +365,33 @@ async function dispatchDue(out: Row) {
   out.dispatched = markets;
 }
 
+// ---------- scheduled GitHub jobs ----------
+// GitHub's own schedules run hours late or not at all when it is busy, so the database's scheduler
+// (pg_cron, migration 20261106090000) starts these by calling this function with {"job": name}.
+// Only the jobs listed here can be started.
+const JOBS: Record<string, { workflow: string; inputs: Record<string, string> }> = {
+  "sample-metrics": { workflow: "metrics-mock.yml", inputs: { days_back: "0" } },
+  "capture-svenssons": { workflow: "capture.yml", inputs: { markets: "site:svenssons", devices: "desktop,mobile", reason: "scheduled" } },
+};
+
+async function startJob(name: string): Promise<Response> {
+  const job = JOBS[name];
+  if (!job) return new Response(`Unknown job ${name}`, { status: 400 });
+  const r = await fetch(`https://api.github.com/repos/${REPO}/actions/workflows/${job.workflow}/dispatches`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${GH_TOKEN}`, Accept: "application/vnd.github+json",
+               "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "hindsight-sync-poll" },
+    body: JSON.stringify({ ref: "main", inputs: job.inputs }),
+  });
+  const body = r.ok ? { started: name } : { job: name, error: `GitHub dispatch ${r.status}: ${(await r.text()).slice(0, 200)}` };
+  return new Response(JSON.stringify(body), { status: r.ok ? 200 : 500, headers: { "Content-Type": "application/json" } });
+}
+
 Deno.serve(async (req) => {
   const ok = await db("POST", "rpc/hindsight_cron_ok", { secret: req.headers.get("x-hindsight-cron") ?? "" }, "return=representation");
   if (ok !== true) return new Response("Forbidden", { status: 403 });
+  const payload: Row = await req.json().catch(() => ({}));
+  if (payload?.job) return await startJob(String(payload.job));
 
   const out: Row = {};
   const errors: string[] = [];

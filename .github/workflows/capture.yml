@@ -1,11 +1,8 @@
 name: Capture
 
+# Started by the database scheduler (see sync-poll): on Contentful changes for Nordic Nest and KitchenTime,
+# and twice a day for Svenssons (07:10, 13:10 Stockholm) until Svenssons has a Contentful delivery key.
 on:
-  # Temporary until Svenssons has a Contentful delivery key (CONTENTFUL_DELIVERY_TOKEN_SVENSSONS):
-  # Svenssons twice a day (07:10 and 13:10 Stockholm). Pages that didn't change are not stored.
-  # Nordic Nest and KitchenTime are captured when Contentful changes (sync-poll).
-  schedule:
-    - cron: "10 6,12 * * *"
   workflow_dispatch:
     inputs:
       markets:

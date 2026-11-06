@@ -3,6 +3,7 @@ name: Sample metrics
 # Fills the metric tables with sample numbers for the POC demo, attached to the real
 # captured promotions. Stand-in for the daily BigQuery sync until we have access:
 # rows are marked source = 'mock' and the real sync replaces them.
+# Started daily at 06:40 Stockholm by the database scheduler (see sync-poll JOBS), not by GitHub's schedule.
 on:
   workflow_dispatch:
     inputs:
@@ -10,8 +11,6 @@ on:
         description: "Days of made-up history before each market's first capture (0 = only days with a capture)"
         default: "0"
         required: true
-  schedule:
-    - cron: "40 5 * * *"   # daily, so new captures get numbers too
 
 permissions:
   contents: read
