@@ -1,0 +1,21 @@
+name: Contentful page rates
+
+# How often Contentful pages are published, per site and page type (storage estimates).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - env:
+          CONTENTFUL_MANAGEMENT_TOKEN: ${{ secrets.CONTENTFUL_MANAGEMENT_TOKEN }}
+        run: python tools/contentful_page_rates.py
