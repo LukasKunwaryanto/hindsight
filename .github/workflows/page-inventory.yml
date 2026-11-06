@@ -23,9 +23,9 @@ jobs:
           www.nordicnest.gr www.nordicnest.jp www.nordicnest.kr www.nordicnest.cn
           www.svenssons.se www.svenssons.no
           www.kitchentime.se www.kitchentime.no www.kitchentime.dk www.kitchentime.fi www.kitchentime.de www.kitchentime.com
-          > inventory.txt; tail -c 300 inventory.txt
+          
       - uses: actions/upload-artifact@v4
         with:
           name: inventory
-          path: inventory.txt
+          path: inventory.json.gz
           retention-days: 3

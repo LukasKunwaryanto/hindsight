@@ -48,12 +48,14 @@ def domain(d):
             u = locs(xml)
             out["sitemaps"][m] = len(u)
             out["samples"][m] = u[:3]
+            out.setdefault("urls", {})[m] = u
     return d, out
 
 
 domains = sys.argv[1:]
 with ThreadPoolExecutor(8) as ex:
     res = dict(ex.map(domain, domains))
-print("INVENTORY_JSON_START")
-print(json.dumps(res))
-print("INVENTORY_JSON_END")
+with gzip.open("inventory.json.gz", "wt", encoding="utf-8") as f:
+    json.dump(res, f)
+for d, v in res.items():
+    print(d, sum(v["sitemaps"].values()), v["errors"][:2])
