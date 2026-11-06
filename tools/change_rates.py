@@ -43,8 +43,8 @@ print("CHANGES_JSON_START"); print(json.dumps(out)); print("CHANGES_JSON_END")
 ch, off = [], 0
 while True:
     page = db._req("GET", "/rest/v1/snapshot_changes", params={
-        "select": "kind,detail,snapshots!inner(market,device,captured_at,capture_requests(reason))",
-        "snapshots.device": "eq.desktop", "limit": "1000", "offset": str(off)}) or []
+        "select": "kind,detail,s:snapshots!snapshot_changes_snapshot_id_fkey!inner(market,device,captured_at,capture_requests(reason))",
+        "s.device": "eq.desktop", "limit": "1000", "offset": str(off)}) or []
     ch += page
     if len(page) < 1000:
         break
@@ -52,7 +52,7 @@ while True:
 site_days = defaultdict(set)
 kinds = Counter()
 for c in ch:
-    s = c["snapshots"]
+    s = c["s"]
     if ":" in s["market"] or (s.get("capture_requests") or {}).get("reason") != "contentful":
         continue
     lab = (c.get("detail") or {}).get("label", "")
