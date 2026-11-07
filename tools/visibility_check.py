@@ -3,18 +3,27 @@ shows it, and count images that are broken or invisible. The structure check (ch
 fade-in rule left every image at opacity 0; this one looks at what a person would see.
 Exits non-zero when a page has more than ALLOWED problem images. Env: SUPABASE_URL, SUPABASE_SECRET_KEY."""
 import asyncio
-import functools
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "capture"))
 from playwright.async_api import async_playwright  # noqa: E402
 from rebuild import rebuild  # noqa: E402
-from store import SupabaseStore  # noqa: E402
+from store import ASSET_BUCKET, EXT, SupabaseStore  # noqa: E402
 
 ALLOWED = int(os.environ.get("HINDSIGHT_ALLOWED_PROBLEMS", "2"))
 db = SupabaseStore(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SECRET_KEY"])
-url_of = functools.lru_cache(maxsize=None)(db.asset_url)
+# stored files live at <bucket>/<first 2 of hash>/<hash>.<ext>: no lookup needed
+url_of = lambda h, mime: f"{db.url}/storage/v1/object/public/{ASSET_BUCKET}/{h[:2]}/{h}.{EXT.get(mime, 'bin')}"
+_blobs: dict = {}
+
+
+def get_blobs(hashes):
+    """Pieces are shared between pages: fetch each once."""
+    missing = [h for h in hashes if h not in _blobs]
+    if missing:
+        _blobs.update(db.get_blobs(missing))
+    return {h: _blobs[h] for h in hashes if h in _blobs}
 
 CHECK_JS = """async () => {
   await Promise.all([...document.images].map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; setTimeout(r, 8000); })));
@@ -41,14 +50,18 @@ async def main():
     markets = [m["locale"] for m in db.markets()]
     pages = [("/", m) for m in markets] + [(p["path"], p["market"]) for p in db.pages() if p["market"] in markets]
     lines, failed = ["## Visibility check", "", "| Market | Page | Images | Broken | Invisible |", "| --- | --- | --- | --- | --- |"], []
-    async with async_playwright() as p:
-        b = await p.chromium.launch()
-        for path, m in pages:
-            rows = db._req("GET", "/rest/v1/snapshots", params={"select": "id,manifest", "market": f"eq.{m}", "page": f"eq.{path}",
-                                                                 "device": "eq.desktop", "order": "captured_at.desc", "limit": "1"})
+    slots = asyncio.Semaphore(4)
+    lock = asyncio.Lock()
+
+    async def check(b, path, m):
+        async with slots:
+            rows = await asyncio.to_thread(db._req, "GET", "/rest/v1/snapshots", None, None, False, {
+                "select": "id,manifest", "market": f"eq.{m}", "page": f"eq.{path}", "device": "eq.desktop",
+                "order": "captured_at.desc", "limit": "1"})
             if not rows:
-                continue
-            html = rebuild(rows[0]["manifest"], db.get_blobs, lambda h, mime: url_of(h) or "", db.product_images)
+                return
+            async with lock:  # the piece cache is shared
+                html = await asyncio.to_thread(rebuild, rows[0]["manifest"], get_blobs, url_of, db.product_images)
             pg = await b.new_page(viewport={"width": 1440, "height": 900})
             try:
                 await pg.set_content(html, wait_until="load", timeout=90000)
@@ -60,6 +73,10 @@ async def main():
             lines.append(f"| {m} | {path} | {res['images']} | {len(res['broken'])} | {len(res['invisible'])} |")
             if bad > ALLOWED:
                 failed.append(f"{m} {path}: {res['broken'][:2]} {res['invisible'][:2]}")
+
+    async with async_playwright() as p:
+        b = await p.chromium.launch()
+        await asyncio.gather(*[check(b, path, m) for path, m in pages])
         await b.close()
     lines += ["", f"{len(failed)} of {len(pages)} pages have more than {ALLOWED} problem images."] + [f"- {f}" for f in failed]
     md = "\n".join(lines)
