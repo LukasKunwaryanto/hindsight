@@ -1,0 +1,30 @@
+name: Product API probe
+
+# Lists the requests a category page makes for its products (how live product data could be fetched).
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        default: "https://www.nordicnest.se/belysning/ https://www.kitchentime.se/matlagning/"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+      - run: python tools/product_api_probe.py ${{ inputs.urls }} > probe.json; head -c 200 probe.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probe
+          path: probe.json
+          retention-days: 3
