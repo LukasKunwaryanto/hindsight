@@ -6,6 +6,8 @@ on:
     inputs:
       targets:
         default: "sv-SE,sv-SE@/belysning/,sv-SE@/nyheter/,sv-SE@/inspiration-tips/,kitchentime:sv-SE,kitchentime:sv-SE@/matlagning/"
+      devices:
+        default: desktop
 
 permissions:
   contents: read
@@ -26,8 +28,8 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Capture twice
         run: |
-          python capture/run.py --markets "${{ inputs.targets }}" --devices desktop --store memory:store.pkl --rebuild-dir out --reason pass
-          python capture/run.py --markets "${{ inputs.targets }}" --devices desktop --store memory:store.pkl --reason pass
+          python capture/run.py --markets "${{ inputs.targets }}" --devices "${{ inputs.devices }}" --store memory:store.pkl --rebuild-dir out --reason pass
+          python capture/run.py --markets "${{ inputs.targets }}" --devices "${{ inputs.devices }}" --store memory:store.pkl --reason pass
       - name: What changed on the second pass
         run: |
           python - <<'PY'
@@ -56,7 +58,7 @@ jobs:
               async with async_playwright() as p:
                   b = await p.chromium.launch()
                   for f in sorted(glob.glob("out/*.html")):
-                      pg = await b.new_page(viewport={"width": 1440, "height": 900})
+                      pg = await b.new_page(viewport={"width": 390 if "-mobile" in f else 1440, "height": 900})
                       await pg.goto("file://" + __import__("os").path.abspath(f)); await pg.wait_for_timeout(2500)
                       await pg.screenshot(path=f.replace(".html", ".png"), full_page=True); await pg.close()
                   await b.close()
