@@ -54,6 +54,8 @@ def page_index(site):
                 except Exception as e:
                     ERRORS.setdefault((site, t), str(e)[:200])
                     break
+                if skip == 0:
+                    print(f"  {site}/{t}: {res.get('total')} entries; first urls: {str((res.get('items') or [{}])[0].get('fields', {}).get('urls'))[:200]}", flush=True)
                 for e in res.get("items", []):
                     f = e.get("fields", {})
                     name = next(iter((f.get("internalName") or {}).values()), None)
@@ -65,6 +67,8 @@ def page_index(site):
                 if skip >= res.get("total", 0):
                     break
     _index[site] = idx
+    sample = sorted(k for k in idx if k[0] in ("sv-SE", "yo"))[:6]
+    print(f"{site}: {len(idx)} (language, path) pairs from Contentful, e.g. {sample}", flush=True)
     return idx
 
 
