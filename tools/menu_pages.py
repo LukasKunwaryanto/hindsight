@@ -78,7 +78,7 @@ def entries_for(site, lang, paths):
 
 
 markets = db._req("GET", "/rest/v1/markets", params={"select": "locale,url,lang,site", "enabled": "eq.true"})
-existing = {(p["market"], p["path"]): p for p in db._req("GET", "/rest/v1/pages", params={"select": "market,path,kind,enabled,entry_id"}) or []}
+existing = {(p["market"], p["path"]): p for p in db._req("GET", "/rest/v1/pages", params={"select": "market,path,kind,enabled,entry_id,title"}) or []}
 rows, seen, report = [], set(), []
 for m in markets:
     _, mods, man = db.latest_snapshot(m["locale"], "desktop", "/")
@@ -104,10 +104,8 @@ for m in markets:
         seen.add((m["locale"], path))
         old = existing.get((m["locale"], path))
         eid, title = (old["entry_id"], None) if old and old.get("entry_id") else found.get(path, (None, None))
-        row = {"market": m["locale"], "path": path, "kind": "menu", "enabled": True, "entry_id": eid}
-        if title:
-            row["title"] = title
-        rows.append(row)
+        rows.append({"market": m["locale"], "path": path, "kind": "menu", "enabled": True, "entry_id": eid,
+                     "title": title or (old or {}).get("title")})
     report.append(f"| {m['locale']} | {len(paths)} | {sum(1 for r in rows if r['market'] == m['locale'] and r['entry_id'])} | {' '.join(paths)} |")
 
 for i in range(0, len(rows), 200):
