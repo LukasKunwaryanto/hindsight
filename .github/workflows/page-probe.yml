@@ -1,0 +1,25 @@
+name: Page probe
+
+# Third-party hosts a page contacts, and the structure around product cards (capture design checks).
+on:
+  workflow_dispatch:
+    inputs:
+      urls:
+        default: "https://www.nordicnest.se/ https://www.nordicnest.se/belysning/ https://www.nordicnest.se/nyheter/ https://www.kitchentime.se/matlagning/ https://www.svenssons.se/mobler/ https://www.nordicnest.se/varumarken/muuto/"
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+      - run: python tools/page_probe.py ${{ inputs.urls }}
