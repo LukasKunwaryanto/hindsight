@@ -31,6 +31,9 @@ def cda(space, token, path, **q):
         return json.load(r)
 
 
+ERRORS = {}
+
+
 def entries_for(site, lang, paths):
     """path -> (entry id, internal name), one query per page type for all of a market's paths."""
     space, _, token_env, _ = SITES[site]
@@ -44,8 +47,10 @@ def entries_for(site, lang, paths):
             # urls = the page's parent entry ids + its path, per language
             res = cda(space, token, "/entries", content_type=t, locale=lang, limit=200,
                       **{"fields.urls[in]": ",".join(sorted(want))})
-        except Exception:
-            continue  # content type without a urls field
+        except Exception as e:  # e.g. a content type without a urls field
+            msg = getattr(e, "read", lambda: b"")()[:300]
+            ERRORS.setdefault((site, t), f"{e} {msg!r}")
+            continue
         for e in res.get("items", []):
             for u in e.get("fields", {}).get("urls") or []:
                 key = u if u.endswith("/") else u + "/"
@@ -95,6 +100,7 @@ gone = [k for k, p in existing.items() if p["kind"] == "menu" and p["enabled"] a
 for mk, path in gone:
     db._req("PATCH", "/rest/v1/pages", {"enabled": False}, {"Prefer": "return=minimal"},
             params={"market": f"eq.{mk}", "path": f"eq.{path}", "kind": "eq.menu"})
+print("Contentful errors (first per site and type):", json.dumps({f"{k[0]}/{k[1]}": v for k, v in ERRORS.items()}, indent=1)[:3000])
 md = "\n".join(["## Menu pages", "", f"{len(rows)} menu pages, {sum(1 for r in rows if r['entry_id'])} with a Contentful entry; "
                 f"{len(gone)} switched off (left the menu).", "", "| Market | Pages | With entry | Paths |", "| --- | --- | --- | --- |"] + report)
 print(md)
