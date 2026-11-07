@@ -28,6 +28,25 @@ jobs:
         run: |
           python capture/run.py --markets "${{ inputs.targets }}" --devices desktop --store memory:store.pkl --rebuild-dir out --reason pass
           python capture/run.py --markets "${{ inputs.targets }}" --devices desktop --store memory:store.pkl --reason pass
+      - name: What changed on the second pass
+        run: |
+          python - <<'PY'
+          import pickle, gzip, difflib, sys
+          sys.path.insert(0, "capture")
+          d = pickle.load(open("store.pkl", "rb"))
+          T = lambda h: gzip.decompress(d["blobs"][h][1]).decode() if h in d["blobs"] else ""
+          for s in d["snapshots"]:
+              for c in s["changes"]:
+                  det = c.get("detail") or {}
+                  if not det.get("before"):
+                      continue
+                  a, b = T(det["before"]), T(det["after"])
+                  print("==", s["row"]["market"], s["row"].get("page"), c["kind"], det.get("label"))
+                  sm = difflib.SequenceMatcher(None, a, b)
+                  for op, i1, i2, j1, j2 in sm.get_opcodes():
+                      if op != "equal":
+                          print("  ", op, repr(a[max(0, i1 - 60):i2 + 20][:240]), "->", repr(b[max(0, j1 - 60):j2 + 20][:240]))
+          PY
       - name: Screenshots
         run: |
           python - <<'PY'
