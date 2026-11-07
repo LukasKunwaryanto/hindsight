@@ -4,7 +4,7 @@ passes here stays correct until the rebuild code changes (tested separately) or 
 import asyncio
 import io
 
-from PIL import Image, ImageChops
+from PIL import Image, ImageChops, ImageFilter
 
 from browser import DEVICES, VISIBLE_JS, WAIT_IMAGES_JS
 
@@ -12,13 +12,27 @@ from browser import DEVICES, VISIBLE_JS, WAIT_IMAGES_JS
 MAX_DIFF = 0.25
 
 
-def pixel_diff(a: bytes, b: bytes) -> float:
-    """Share of pixels that differ clearly between two screenshots of the same size."""
-    ia, ib = Image.open(io.BytesIO(a)).convert("RGB"), Image.open(io.BytesIO(b)).convert("RGB")
-    if ia.size != ib.size:
-        ib = ib.resize(ia.size)
-    d = ImageChops.difference(ia, ib).convert("L").point(lambda v: 255 if v > 40 else 0)
-    return round(d.histogram()[255] / (ia.size[0] * ia.size[1]), 3)
+def _img(b: bytes, size=None):
+    im = Image.open(io.BytesIO(b)).convert("RGB")
+    return im.resize(size) if size and im.size != size else im
+
+
+def _changed(a, b):
+    return ImageChops.difference(a, b).convert("L").point(lambda v: 255 if v > 40 else 0)
+
+
+def pixel_diff(live: bytes, stored: bytes, stored_later: bytes | None = None) -> float:
+    """Share of still pixels that differ clearly between the live and stored first screen. Pixels that move on
+    the stored page by themselves (video, animated images, carousels, countdowns) are left out."""
+    a = _img(live)
+    b = _img(stored, a.size)
+    d = _changed(a, b)
+    still = a.size[0] * a.size[1]
+    if stored_later:
+        moving = _changed(b, _img(stored_later, a.size)).filter(ImageFilter.MaxFilter(15))
+        d = ImageChops.subtract(d, moving)
+        still -= moving.histogram()[255]
+    return round(d.histogram()[255] / max(still, 1), 3)
 
 
 async def verify(browser, html: str, device: str, live: dict) -> dict:
@@ -30,9 +44,11 @@ async def verify(browser, html: str, device: str, live: dict) -> dict:
         await page.wait_for_timeout(500)
         got = await page.evaluate(VISIBLE_JS)
         shot = await page.screenshot(type="png")
+        await page.wait_for_timeout(1200)
+        later = await page.screenshot(type="png")
     finally:
         await ctx.close()
-    diff = pixel_diff(live["shot"], shot) if live.get("shot") else None
+    diff = pixel_diff(live["shot"], shot, later) if live.get("shot") else None
     problems = []
     if got["images"] < live["images"] * 0.9 - 1:
         problems.append(f"{live['images'] - got['images']} images missing or invisible")
