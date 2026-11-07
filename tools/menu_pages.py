@@ -31,27 +31,27 @@ def cda(space, token, path, **q):
         return json.load(r)
 
 
-def entry_for(site, lang, path):
+def entries_for(site, lang, paths):
+    """path -> (entry id, internal name), one query per page type for all of a market's paths."""
     space, _, token_env, _ = SITES[site]
     token = os.environ.get(token_env, "").strip()
-    if not token:
-        return None, None
+    out = {}
+    if not token or not paths:
+        return out
+    want = set(paths) | {p.rstrip("/") for p in paths}
     for t in TYPES:
-        for value in (path, path.rstrip("/")):
-            try:
-                # urls = the page's parent entry ids + its path, per language
-                res = cda(space, token, "/entries", content_type=t, locale=lang, limit=1, **{"fields.urls": value},
-                          select="sys.id,fields.internalName")
-            except Exception:
-                try:  # content types without internalName
-                    res = cda(space, token, "/entries", content_type=t, locale=lang, limit=1, **{"fields.urls": value},
-                              select="sys.id")
-                except Exception:
-                    continue
-            if res.get("items"):
-                f = res["items"][0].get("fields", {})
-                return res["items"][0]["sys"]["id"], f.get("internalName")
-    return None, None
+        try:
+            # urls = the page's parent entry ids + its path, per language
+            res = cda(space, token, "/entries", content_type=t, locale=lang, limit=200,
+                      **{"fields.urls[in]": ",".join(sorted(want))})
+        except Exception:
+            continue  # content type without a urls field
+        for e in res.get("items", []):
+            for u in e.get("fields", {}).get("urls") or []:
+                key = u if u.endswith("/") else u + "/"
+                if key in paths and key not in out:
+                    out[key] = (e["sys"]["id"], e.get("fields", {}).get("internalName"))
+    return out
 
 
 markets = db._req("GET", "/rest/v1/markets", params={"select": "locale,url,lang,site", "enabled": "eq.true"})
@@ -75,10 +75,12 @@ for m in markets:
             continue
         paths.append(path)
     paths = list(dict.fromkeys(paths))
+    found = entries_for(m["site"] or "nordicnest", m["lang"] or m["locale"],
+                        [p for p in paths if not (existing.get((m["locale"], p)) or {}).get("entry_id")])
     for path in paths:
         seen.add((m["locale"], path))
         old = existing.get((m["locale"], path))
-        eid, title = (old["entry_id"], None) if old and old.get("entry_id") else entry_for(m["site"] or "nordicnest", m["lang"] or m["locale"], path)
+        eid, title = (old["entry_id"], None) if old and old.get("entry_id") else found.get(path, (None, None))
         row = {"market": m["locale"], "path": path, "kind": "menu", "enabled": True, "entry_id": eid}
         if title:
             row["title"] = title
