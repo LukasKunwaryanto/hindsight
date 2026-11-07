@@ -70,9 +70,10 @@ class SupabaseStore:
             found |= {r["hash"] for r in rows or []}
         return found
 
-    def _insert(self, table: str, rows: list[dict], on_conflict: str | None = None, ret=False):
+    def _insert(self, table: str, rows: list[dict], on_conflict: str | None = None, ret=False, merge=False):
         out = []
-        prefer = ("return=representation" if ret else "return=minimal") + (",resolution=ignore-duplicates" if on_conflict else "")
+        resolution = ",resolution=merge-duplicates" if merge else ",resolution=ignore-duplicates"
+        prefer = ("return=representation" if ret else "return=minimal") + (resolution if on_conflict else "")
         params = {"on_conflict": on_conflict} if on_conflict else None
         for i in range(0, len(rows), 200):
             res = self._req("POST", f"/rest/v1/{table}", rows[i:i + 200], {"Prefer": prefer}, params=params)
@@ -131,10 +132,10 @@ class SupabaseStore:
                      on_conflict="market,sku")
 
     # --- snapshots -------------------------------------------------------------
-    def latest_snapshot(self, market: str, device: str):
+    def latest_snapshot(self, market: str, device: str, page: str = "/"):
         """(id, all blocks incl. header/chrome from its manifest, manifest) of the newest snapshot."""
         rows = self._req("GET", "/rest/v1/snapshots", params={
-            "select": "id,manifest", "market": f"eq.{market}", "device": f"eq.{device}",
+            "select": "id,manifest", "market": f"eq.{market}", "device": f"eq.{device}", "page": f"eq.{page}",
             "order": "captured_at.desc", "limit": "1"})
         if not rows:
             return None, None, None
@@ -171,6 +172,9 @@ class SupabaseStore:
         return out
 
     def save_snapshot(self, row: dict, modules: list[dict], changes: list[dict]) -> str:
+        if row.get("page", "/") != "/":
+            # inner pages: changes go in the snapshot row, blocks are in the manifest (fewer rows per snapshot)
+            return self._insert("snapshots", [{**row, "changes": changes}], ret=True)[0]["id"]
         sid = self._insert("snapshots", [row], ret=True)[0]["id"]
         # rows only for content blocks (promotions); the full list is in the manifest
         self._insert("snapshot_modules", [{**m, "snapshot_id": sid} for m in modules if m.get("entry_id")])
@@ -178,22 +182,61 @@ class SupabaseStore:
             self._insert("snapshot_changes", [{**c, "snapshot_id": sid, "previous_snapshot_id": row.get("previous_snapshot_id")} for c in changes])
         return sid
 
+    # --- site bars, product images, pages ----------------------------------------
+    def latest_site_parts(self, market: str, device: str):
+        rows = self._req("GET", "/rest/v1/site_parts", params={
+            "select": "parts", "market": f"eq.{market}", "device": f"eq.{device}", "order": "captured_at.desc", "limit": "1"})
+        return rows[0]["parts"] if rows else None
+
+    def save_site_parts(self, market: str, device: str, parts: list[dict]):
+        self._insert("site_parts", [{"market": market, "device": device, "parts": parts}])
+
+    def save_product_images(self, images: dict[str, str]):
+        """SKU -> image, once per product. A stored copy (hs-asset) replaces a plain link when it comes along."""
+        rows = [{"sku": k, "src": v} for k, v in images.items() if k != "unknown" and not v.startswith("hs-asset:")]
+        kept = [{"sku": k, "asset": v} for k, v in images.items() if k != "unknown" and v.startswith("hs-asset:")]
+        if rows:
+            self._insert("product_images", rows, on_conflict="sku")
+        for r in kept:  # rarely many: only key pages store product images
+            if not self._req("PATCH", "/rest/v1/product_images", {"asset": r["asset"]},
+                             {"Prefer": "return=representation"}, params={"sku": f"eq.{r['sku']}", "asset": "is.null"}):
+                self._insert("product_images", [{"sku": r["sku"], "src": "", "asset": r["asset"]}], on_conflict="sku")
+
+    def product_images(self, skus: list[str]) -> dict[str, str]:
+        out = {}
+        skus = [s for s in skus if s and "," not in s]
+        for i in range(0, len(skus), 100):
+            rows = self._req("GET", "/rest/v1/product_images", params={
+                "select": "sku,src,asset", "sku": f"in.({','.join(skus[i:i + 100])})"})
+            out.update({r["sku"]: r["asset"] or r["src"] for r in rows or []})
+        return out
+
+    def pages(self) -> list[dict]:
+        return self._req("GET", "/rest/v1/pages", params={"select": "market,path,kind", "enabled": "eq.true",
+                                                           "order": "market,path"}) or []
+
     # --- capture requests ------------------------------------------------------
-    def open_request(self, market: str, device: str, reason: str) -> int:
-        """Use the request the poller started for this run, else claim a waiting one, else make one."""
+    def open_request(self, market: str, device: str, reason: str, page: str = "/"):
+        """Use the request the poller started for this run, else claim a waiting one, else make one.
+        Scheduled passes over many pages log in the run's summary instead (no row per page)."""
+        if reason == "pass":
+            return None
         for status in ("started", "waiting"):
             rows = self._req("GET", "/rest/v1/capture_requests", params={
-                "select": "id", "market": f"eq.{market}", "device": f"eq.{device}", "status": f"eq.{status}",
-                "order": "id.desc", "limit": "1"})
+                "select": "id", "market": f"eq.{market}", "device": f"eq.{device}", "page": f"eq.{page}",
+                "status": f"eq.{status}", "order": "id.desc", "limit": "1"})
             if rows:
                 rid = rows[0]["id"]
                 break
         else:
-            rid = self._insert("capture_requests", [{"market": market, "device": device, "reason": reason}], ret=True)[0]["id"]
+            rid = self._insert("capture_requests", [{"market": market, "device": device, "reason": reason, "page": page}],
+                               ret=True)[0]["id"]
         self.update_request(rid, status="started", started_at="now()")
         return rid
 
     def update_request(self, rid: int, **fields):
+        if rid is None:
+            return
         if fields.get("started_at") == "now()" or fields.get("finished_at") == "now()":
             now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             fields = {k: (now if v == "now()" else v) for k, v in fields.items()}
@@ -260,9 +303,9 @@ class MemoryStore:
     def asset_urls(self, hashes):
         return {h: self.d["assets"][h]["url"] for h in hashes if h in self.d["assets"]}
 
-    def latest_snapshot(self, market, device):
+    def latest_snapshot(self, market, device, page="/"):
         for s in reversed(self.d["snapshots"]):
-            if s["row"]["market"] == market and s["row"]["device"] == device:
+            if s["row"]["market"] == market and s["row"]["device"] == device and s["row"].get("page", "/") == page:
                 return s["id"], modules_from_manifest(s["row"]["manifest"]), s["row"]["manifest"]
         return None, None, None
 
@@ -277,9 +320,29 @@ class MemoryStore:
         self.flush()
         return sid
 
-    def open_request(self, market, device, reason):
+    def open_request(self, market, device, reason, page="/"):
         self.d["requests"] += 1
         return self.d["requests"]
+
+    def latest_site_parts(self, market, device):
+        v = [p for p in self.d.setdefault("site_parts", []) if p["market"] == market and p["device"] == device]
+        return v[-1]["parts"] if v else None
+
+    def save_site_parts(self, market, device, parts):
+        self.d.setdefault("site_parts", []).append({"market": market, "device": device, "parts": parts})
+
+    def save_product_images(self, images):
+        pi = self.d.setdefault("product_images", {})
+        for k, v in images.items():
+            if v.startswith("hs-asset:") or k not in pi:
+                pi[k] = v
+
+    def product_images(self, skus):
+        pi = self.d.get("product_images", {})
+        return {k: pi[k] for k in skus if k in pi}
+
+    def pages(self):
+        return []
 
     def update_request(self, rid, **fields):
         pass

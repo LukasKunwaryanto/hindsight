@@ -7,12 +7,29 @@ import re
 PH = re.compile(r'<hs-module ref="([0-9a-f]{16})"></hs-module>')
 CARD = re.compile(r'<hs-card (i|k)="([^"]+)"></hs-card>')
 ASSET = re.compile(r"hs-asset:([0-9a-f]{16}):([a-z/+0-9.-]+)")
+GCARD = "<hs-gcard></hs-gcard>"
+SITE_PARTS = ("header", "footer", "chrome")
 
 
-def rebuild(manifest: dict, get_blobs, asset_src) -> str:
-    """get_blobs(list[hash]) -> {hash: text}; asset_src(hash, mime) -> URL or data URI."""
+def grid_card(src: str, ratio) -> str:
+    """Placeholder for one product in a listing grid: its image only."""
+    ar = f"aspect-ratio:1/{ratio};" if ratio else "aspect-ratio:1/1;"
+    img = (f'<img src="{src}" alt="" loading="lazy" style="display:block;width:100%;{ar}object-fit:contain;opacity:1">'
+           if src else f'<div style="width:100%;{ar}background:#f2f2f2"></div>')
+    return f'<div class="hs-gcard" style="display:block;width:100%">{img}</div>'
+
+
+def rebuild(manifest: dict, get_blobs, asset_src, product_images=None, site_parts=None) -> str:
+    """get_blobs(list[hash]) -> {hash: text}; asset_src(hash, mime) -> URL or data URI.
+    product_images(list[sku]) -> {sku: image URL or hs-asset ref}, for pages with a listing grid.
+    site_parts: the site bars to show instead of the ones captured with the page, as a list of
+      {label, ref} in page order (from site_parts at the time being viewed); ignored if the count differs."""
+    swap = {}
+    own = [m for m in manifest["modules"] if m["label"] in SITE_PARTS]
+    if site_parts and len(site_parts) == len(own):
+        swap = {a["ref"]: b["ref"] for a, b in zip(own, site_parts) if a["ref"] != b["ref"]}
     want = {manifest["shell"], manifest["ruleset"], *manifest["static_css"],
-            *[m["ref"] for m in manifest["modules"]]}
+            *[swap.get(m["ref"], m["ref"]) for m in manifest["modules"]]}
     for c in manifest.get("cards", []):
         want |= {c["card"], *(b["ref"] for b in c["badges"])} | ({c["price"]} if c.get("price") else set())
     texts = get_blobs(sorted(want))
@@ -36,11 +53,17 @@ def rebuild(manifest: dict, get_blobs, asset_src) -> str:
         return h.replace('<hs-slot n="badges"></hs-slot>', "".join(texts[b["ref"]] for b in c["badges"]))
 
     for _ in range(6):  # blocks -> cards -> parts
-        nxt = PH.sub(lambda m: texts.get(m.group(1)) or _fetch(m.group(1), texts, get_blobs), html)
+        nxt = PH.sub(lambda m: texts.get(swap.get(m.group(1), m.group(1))) or _fetch(swap.get(m.group(1), m.group(1)), texts, get_blobs), html)
         nxt = CARD.sub(card_html, nxt)
         if nxt == html:
             break
         html = nxt
+
+    grid = manifest.get("grid") or []
+    if grid:
+        imgs = product_images(sorted(set(grid))) if product_images else {}
+        it = iter(grid)
+        html = re.sub(re.escape(GCARD), lambda m: grid_card(imgs.get(next(it, ""), ""), manifest.get("grid_ratio")), html)
 
     css = "".join(f"<style>{texts[k]}</style>" for k in manifest["static_css"])
     rules = [json.loads(texts[k]) for k in rule_keys]

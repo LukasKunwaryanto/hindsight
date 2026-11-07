@@ -57,6 +57,10 @@ def module_info(html: str) -> dict:
 
 
 CLASS_RE = re.compile(r' class="[^"]*"')
+SVG_RE = re.compile(r"hs-asset:([0-9a-f]{16}):image/svg\+xml")
+BLANK = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+# Not changes: countdowns ticking, header states, carousels reshuffling the same products, icons not loaded yet
+NOISE = ("timer", "state", "reorder", "flake")
 CARD_RE = re.compile(r'<hs-card [ik]="[^"]+"></hs-card>')
 SITE_PARTS = ("header", "footer", "chrome")
 
@@ -73,6 +77,10 @@ def _kind_of_edit(before: str, after: str, asset_urls: dict, label: str = "") ->
         return "state"  # header/bar only switched a styling state (e.g. scrolled), nothing visible changed
     img = lambda h: {image_key(asset_urls.get(a, a)) if a else image_key(b) for a, b in ASSET_RE.findall(h)}
     if img(before) != img(after):
+        # an icon that hadn't loaded yet (stored as a blank) is not a new image
+        svg = lambda h: {image_key(asset_urls.get(a, a)) for a in SVG_RE.findall(h)}
+        if (img(before) ^ img(after)) <= (svg(before) | svg(after)) and (BLANK in before or BLANK in after):
+            return "flake"
         return "image"
     txt = lambda h: " ".join(_text(lxml.html.fromstring(h)).split()) if h.strip() else ""
     try:
@@ -93,11 +101,15 @@ def _keyed(mods):
     return out
 
 
-def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, str], asset_urls: dict | None = None):
+def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, str], asset_urls: dict | None = None,
+                     products_are_noise: bool = False, ignore_site_parts: bool = False):
     """Compare two snapshots' blocks.
 
     prev/cur: module rows (position, label, entry_id, blob_hash, title).
     texts: blob_hash -> HTML for every block in both lists.
+    products_are_noise: a carousel showing other products is not a change (captures not caused by a
+      Contentful publish: there it is usually a recommendation or bestseller list rotating).
+    ignore_site_parts: bars, header and footer are kept in their own timeline (inner pages).
     Returns (changes, summary) where summary = {change_size, change_title, change_description}.
     """
     if prev is None:
@@ -151,7 +163,8 @@ def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, 
                         "detail": {"before": order_prev, "after": order_cur}})
 
     # countdowns ticking and header states are not changes; header, footer and spacers never make a change "big"
-    changes = [c for c in changes if c["kind"] not in ("timer", "state", "reorder")]
+    changes = [c for c in changes if c["kind"] not in NOISE and not (products_are_noise and c["kind"] == "products")
+               and not (ignore_site_parts and c.get("detail", {}).get("label") in SITE_PARTS)]
     content = [c for c in changes if c.get("rank") is not None]
     structural = [c for c in content if c["kind"] in ("added", "removed", "replaced")]
     top = [c for c in content if (c["rank"] < TOP_BLOCKS and c["kind"] in ("added", "removed", "replaced"))

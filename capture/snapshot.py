@@ -48,8 +48,13 @@ class Pieces:
 
 
 def source_path(url: str) -> str:
-    """Identity of a picture: its address without size/resolution options."""
-    return urlparse(url).path.lower() if url else ""
+    """Identity of a picture: its address without size/resolution options. Product images are the same file
+    in every market and brand under translated folder names, so for them the file name is the identity."""
+    if not url:
+        return ""
+    if is_product_image(url):
+        return "file:" + urlparse(url).path.rsplit("/", 1)[-1].lower()
+    return urlparse(url).path.lower()
 
 
 def source_key(url: str, width=None, mask=False) -> str:
@@ -109,11 +114,17 @@ def _encode_image(raw: bytes, ct: str, width: float | None, mask: bool):
     return buf.getvalue(), "image/avif", *size
 
 
-def build(frozen: dict, page_url: str, known_assets: dict | None = None) -> tuple[dict, list[dict], Pieces]:
+def build(frozen: dict, page_url: str, known_assets: dict | None = None, site_lead: int | None = None,
+          key_page: bool = False) -> tuple[dict, list[dict], Pieces]:
     """Split a frozen page. Returns (manifest, module rows, pieces).
-    known_assets: source_key -> "hs-asset:hash:mime" of files stored before, reused instead of re-encoding."""
+    known_assets: source_key -> "hs-asset:hash:mime" of files stored before, reused instead of re-encoding.
+    site_lead: on pages without <main>, how many #container children before the content are site bars
+      (the same count as on the market's startpage).
+    key_page: startpages and menu pages also keep their product images (stored once per file name);
+      elsewhere product images stay links to the site's image CDN."""
     known_assets = known_assets or {}
     P = Pieces()
+    P.grid_images = {}  # SKU -> image (CDN URL or stored asset) of products in a listing grid
     res = frozen["resources"]
     base = f"{urlparse(page_url).scheme}://{urlparse(page_url).netloc}/"
     cache: dict = {}
@@ -125,7 +136,8 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None) -> tupl
         raw, ct = res.get(url, (None, ""))
         out = None
         skey = source_key(url, width, mask)
-        if raw is not None and skey in known_assets:
+        if skey in known_assets:
+            # stored before (also covers icons the page had not loaded yet when it was frozen)
             out = known_assets[skey]
         elif raw is None:
             out = None
@@ -212,7 +224,7 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None) -> tupl
             if src.startswith("data:"):
                 pass
             elif is_product_image(src):
-                el.set("src", src)
+                el.set("src", (asset_for(src, info["w"]) if key_page else None) or src)
             else:
                 el.set("src", asset_for(src, info["w"]) or TRANSPARENT_GIF)
         for a in ("data-hs-id",):
@@ -241,6 +253,34 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None) -> tupl
         ph = lxml.html.fromstring(markup)
         ph.tail = el.tail
         el.getparent().replace(el, ph)
+
+    # Listing grids (category, brand and campaign pages): only the products' order is kept, as SKUs in the
+    # manifest; the block holds empty slots, so a reshuffled grid doesn't change it. Each product's image is
+    # stored once (product_images) and shown on a placeholder card. Carousels inside content blocks
+    # (Contentful entries) keep full cards below.
+    def in_content_entry(el):
+        e = el.getparent()
+        while e is not None:
+            if isinstance(e.tag, str) and (e.tag == "main" or (e.get("id") and ENTRY_ID_RE.match(e.get("id")))):
+                return True
+            e = e.getparent()
+        return False
+
+    grid, grid_ratio = [], None
+    for card in doc.xpath('//*[@data-test-id="product-card"]'):
+        if in_content_entry(card):
+            continue
+        href = (card.xpath('.//a[@data-test-id="product-link"]/@href') or [""])[0]
+        m = re.search(r"variantId=([^&\"]+)", href)
+        sku = m.group(1) if m else "unknown"
+        img = (card.xpath(".//img/@src") or [""])[0]
+        if img and not img.startswith("data:"):
+            P.grid_images.setdefault(sku, img)
+        if grid_ratio is None:
+            ids = [i for i in frozen["imgs"] if i["src"] and i["src"].split("?")[0] == img.split("?")[0] and i["w"]]
+            grid_ratio = round(ids[0]["h"] / ids[0]["w"], 3) if ids else None
+        grid.append(sku)
+        placeholder(card, "<hs-gcard></hs-gcard>")
 
     # Product cards: stable card + price per SKU + badges per snapshot
     cards = []
@@ -290,21 +330,39 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None) -> tupl
         placeholder(el, f'<hs-module ref="{h}"></hs-module>')
         modules.append({"position": len(modules), "label": label, "entry_id": entry_id, "blob_hash": h})
 
-    for c in list(cont):
-        if not isinstance(c.tag, str):
-            continue
-        if c.tag == "main":
-            for b in list(c):
-                if not isinstance(b.tag, str):
-                    continue
-                ids = [e.get("id") for e in b.iter() if isinstance(e.tag, str) and e.get("id") and ENTRY_ID_RE.match(e.get("id"))]
-                cut(b, "block:" + (ids[0] if ids else "anon"), ids[0] if ids else None)
-        else:
-            cut(c, {"header": "header", "footer": "footer"}.get(c.tag, "chrome"))
+    def cut_block(b):
+        ids = [e.get("id") for e in b.iter() if isinstance(e.tag, str) and e.get("id") and ENTRY_ID_RE.match(e.get("id"))]
+        cut(b, "block:" + (ids[0] if ids else "anon"), ids[0] if ids else None)
+
+    kids_c = elems(cont)
+    if any(c.tag == "main" for c in kids_c):  # startpages: unchanged layout rules
+        for c in kids_c:
+            if c.tag == "main":
+                for b in elems(c):
+                    cut_block(b)
+            else:
+                cut(c, {"header": "header", "footer": "footer"}.get(c.tag, "chrome"))
+    else:
+        # Inner pages have no <main>: the site bars are the first children (as many as on the startpage,
+        # at least up to the header), the footer and what follows it; the rest is the page's own content.
+        hdr = next((i for i, c in enumerate(kids_c) if c.tag == "header"), -1)
+        lead = max(site_lead if site_lead is not None else 4, hdr + 1)
+        ftr = next((i for i, c in enumerate(kids_c) if c.tag == "footer"), len(kids_c))
+        for i, c in enumerate(kids_c):
+            if i < lead or i >= ftr:
+                cut(c, {"header": "header", "footer": "footer"}.get(c.tag, "chrome"))
+            elif elems(c):
+                for b in elems(c):  # one level down: banners, texts and the listing become separate blocks
+                    cut_block(b)
+            else:
+                cut_block(c)
 
     shell = P.blob("shell", "<!DOCTYPE html>\n" + lxml.html.tostring(doc, encoding="unicode"))
     manifest = {"version": 2 if WRITE_V2 else 1, "base": base, "shell": shell, "static_css": static, "ruleset": ruleset,
                 "modules": [{"label": m["label"], "ref": m["blob_hash"]} for m in modules], "cards": cards}
+    if grid:
+        manifest["grid"] = grid
+        manifest["grid_ratio"] = grid_ratio
     return manifest, modules, P
 
 

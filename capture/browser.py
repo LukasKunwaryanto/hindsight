@@ -17,6 +17,20 @@ DEVICES = {
 
 CHALLENGE_MARKERS = ["Just a moment", "challenges.cloudflare.com", "cf-chl-", "Verify you are human"]
 
+# Captures must not count as visits: block tag managers, analytics and ad pixels. The site's own
+# server-side tagging endpoint is ogoun.<site> (GA4 /g/collect). The site still fills window.dataLayer
+# itself, so promotion names keep working.
+TRACKING_HOSTS = ("googletagmanager.com", "google-analytics.com", "analytics.google.com", "doubleclick.net",
+                  "googleadservices.com", "bat.bing.com", "bat.bing.net", "clarity.ms", "facebook.net",
+                  "facebook.com", "connect.facebook", "tiktok.com", "analytics.tiktok", "contentsquare.net",
+                  "hotjar.com", "criteo.com", "criteo.net", "pinterest.com", "pinimg.com/ct", "snapchat.com",
+                  "adform.net", "adnxs.com", "linkedin.com/px", "ads.linkedin")
+
+
+def is_tracking(url: str) -> bool:
+    host = url.split("/", 3)[2] if "://" in url else ""
+    return host.startswith("ogoun.") or any(t in url for t in TRACKING_HOSTS)
+
 # Runs in the page after everything has loaded. Records each image's displayed size,
 # pins its chosen source, and reads every stylesheet from the browser (most CSS is
 # injected by JavaScript and is not in the HTML).
@@ -76,6 +90,12 @@ async def capture_page(browser, url: str, device: str, locale: str, extra_header
     if extra_header and ":" in extra_header:
         name, value = extra_header.split(":", 1)
         await ctx.set_extra_http_headers({name.strip(): value.strip()})
+    blocked = []
+
+    async def block(route):
+        blocked.append(route.request.url[:120])
+        await route.abort()
+    await ctx.route(lambda u: is_tracking(u), block)
     page = await ctx.new_page()
     resources: dict[str, tuple[bytes, str]] = {}
     pending = []
@@ -136,7 +156,7 @@ async def capture_page(browser, url: str, device: str, locale: str, extra_header
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         frozen.update(status=status, resources=resources, images_not_loaded=not_loaded, placeholders=placeholders,
-                      promotions=promotions)
+                      promotions=promotions, tracking_blocked=len(blocked))
         return frozen
     finally:
         await ctx.close()
