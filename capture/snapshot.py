@@ -266,10 +266,13 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None, site_le
             e = e.getparent()
         return False
 
-    grid, grid_ratio = [], None
+    grid, grid_ratio, grid_h = [], None, None
     for card in doc.xpath('//*[@data-test-id="product-card"]'):
+        h = card.attrib.pop("data-hs-h", None)  # measured height; never part of stored pieces
         if in_content_entry(card):
             continue
+        if grid_h is None and h and h.isdigit():
+            grid_h = int(h)
         href = (card.xpath('.//a[@data-test-id="product-link"]/@href') or [""])[0]
         m = re.search(r"variantId=([^&\"]+)", href)
         sku = m.group(1) if m else "unknown"
@@ -363,6 +366,7 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None, site_le
     if grid:
         manifest["grid"] = grid
         manifest["grid_ratio"] = grid_ratio
+        manifest["grid_card_h"] = grid_h
     return manifest, modules, P
 
 

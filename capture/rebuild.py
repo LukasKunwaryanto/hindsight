@@ -11,12 +11,13 @@ GCARD = "<hs-gcard></hs-gcard>"
 SITE_PARTS = ("header", "footer", "chrome")
 
 
-def grid_card(src: str, ratio) -> str:
-    """Placeholder for one product in a listing grid: its image only."""
+def grid_card(src: str, ratio, height=None) -> str:
+    """Placeholder for one product in a listing grid: its image, at the real card's height."""
     ar = f"aspect-ratio:1/{ratio};" if ratio else "aspect-ratio:1/1;"
-    img = (f'<img src="{src}" alt="" loading="lazy" style="display:block;width:100%;{ar}object-fit:contain;opacity:1">'
+    img = (f'<img src="{src}" alt="" style="display:block;width:100%;{ar}object-fit:contain;opacity:1">'
            if src else f'<div style="width:100%;{ar}background:#f2f2f2"></div>')
-    return f'<div class="hs-gcard" style="display:block;width:100%">{img}</div>'
+    mh = f"min-height:{height}px;" if height else ""
+    return f'<div class="hs-gcard" style="display:block;width:100%;{mh}">{img}</div>'
 
 
 def rebuild(manifest: dict, get_blobs, asset_src, product_images=None, site_parts=None) -> str:
@@ -63,7 +64,8 @@ def rebuild(manifest: dict, get_blobs, asset_src, product_images=None, site_part
     if grid:
         imgs = product_images(sorted(set(grid))) if product_images else {}
         it = iter(grid)
-        html = re.sub(re.escape(GCARD), lambda m: grid_card(imgs.get(next(it, ""), ""), manifest.get("grid_ratio")), html)
+        html = re.sub(re.escape(GCARD), lambda m: grid_card(imgs.get(next(it, ""), ""), manifest.get("grid_ratio"),
+                                                            manifest.get("grid_card_h")), html)
 
     css = "".join(f"<style>{texts[k]}</style>" for k in manifest["static_css"])
     rules = [json.loads(texts[k]) for k in rule_keys]

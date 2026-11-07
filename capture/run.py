@@ -60,6 +60,13 @@ async def capture_one(browser, store, market, url, device, reason, rebuild_dir, 
                     v = await verify(browser, html, device, frozen["live"])
                 except Exception as e:
                     v = {"ok": False, "problems": [f"check failed: {e}"[:200]]}
+                shots = v.pop("_shots", None)
+                if rebuild_dir and shots and not v["ok"]:  # keep both first screens to look at
+                    slug = re.sub(r"[^a-z0-9]+", "-", f"{market}-{page}-{device}".lower()).strip("-")
+                    for name, png in zip(("live", "stored"), shots):
+                        if png:
+                            Path(rebuild_dir).mkdir(parents=True, exist_ok=True)
+                            Path(rebuild_dir, f"check-{slug}-{name}.png").write_bytes(png)
                 await asyncio.to_thread(store.update_snapshot, r["snapshot"], stats={**stored["stats"], "verify": v})
                 r["verify"] = "ok" if v["ok"] else "; ".join(v["problems"])
             r.pop("_stored", None)

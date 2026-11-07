@@ -45,6 +45,8 @@ FREEZE_JS = r"""() => {
     el.setAttribute('loading', 'eager'); el.setAttribute('src', src);
     imgs.push({id: i, src, w: r.width, h: r.height});
   });
+  // product cards: their displayed height, so placeholder cards in stored grids keep the page's layout
+  document.querySelectorAll('[data-test-id="product-card"]').forEach(c => c.setAttribute('data-hs-h', Math.round(c.getBoundingClientRect().height)));
   const sheets = [];
   for (const sh of document.styleSheets) {
     let css = '';

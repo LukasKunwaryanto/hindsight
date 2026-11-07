@@ -40,5 +40,5 @@ async def verify(browser, html: str, device: str, live: dict) -> dict:
         problems.append(f"height {got['height']} vs {live['height']}")
     if diff is not None and diff > MAX_DIFF:
         problems.append(f"first screen {round(diff * 100)}% different")
-    return {"ok": not problems, "problems": problems, "images_live": live["images"], "images_stored": got["images"],
+    return {"_shots": (live.get("shot"), shot), "ok": not problems, "problems": problems, "images_live": live["images"], "images_stored": got["images"],
             "height_live": live["height"], "height_stored": got["height"], "first_screen_diff": diff}
