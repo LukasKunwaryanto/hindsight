@@ -41,13 +41,10 @@ CHECK_JS = """async () => {
     if (r.width < 40 || r.height < 40 || r.right < 0 || r.left > W) continue;   // icons, closed carousel slides
     out.images++;
     if (i.complete && i.naturalWidth === 0) { out.broken.push(i.currentSrc.slice(0, 120)); continue; }
-    let op = 1, e = i, hidden = false;
-    while (e && e.nodeType === 1) {
-      const cs = getComputedStyle(e);
-      op *= parseFloat(cs.opacity || '1');
-      if (cs.visibility === 'hidden') hidden = true;
-      e = e.parentElement;
-    }
+    // the image itself transparent or hidden (as with the fade-in bug of 5 Nov). Containers hidden on purpose
+    // (hover popups of "shop the look" hotspots, closed menus) don't count.
+    const cs = getComputedStyle(i);
+    const op = parseFloat(cs.opacity || '1'), hidden = cs.visibility === 'hidden';
     if (hidden || op < 0.1) {
       let z = i; while (z && z.nodeType === 1 && parseFloat(getComputedStyle(z).opacity || '1') >= 0.1 && getComputedStyle(z).visibility !== 'hidden') z = z.parentElement;
       out.invisible.push(i.currentSrc.slice(0, 120));
