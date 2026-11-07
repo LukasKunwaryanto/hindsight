@@ -1,6 +1,6 @@
 name: Visibility check
 
-# Are the stored pages' images actually visible when rebuilt? (started weekly by the database scheduler)
+# Weekly canary: captures that failed their on-save check, plus a random sample of rebuilt pages.
 on:
   workflow_dispatch:
     inputs:

@@ -1,9 +1,11 @@
-"""Visibility check: rebuild the newest stored snapshot of every startpage and inner page (desktop) as the app
-shows it, and count images that are broken or invisible. The structure check (check_rebuild.py) passed while a
-fade-in rule left every image at opacity 0; this one looks at what a person would see.
-Exits non-zero when a page has more than ALLOWED problem images. Env: SUPABASE_URL, SUPABASE_SECRET_KEY."""
+"""Weekly canary. Every stored snapshot is already checked once against its live page when it is saved
+(capture/verify.py), so this only (1) lists snapshots that failed that check in the past week and (2) rebuilds
+a random sample of pages (default 20, HINDSIGHT_SAMPLE) to catch drift such as images gone from a CDN.
+Exits non-zero on either. Env: SUPABASE_URL, SUPABASE_SECRET_KEY."""
 import asyncio
+import datetime
 import os
+import random
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "capture"))
@@ -62,6 +64,12 @@ async def main():
     only = os.environ.get("HINDSIGHT_ONLY")  # e.g. "en-US@/tableware/" to look at one page
     if only:
         pages = [(pg, m) for pg, m in pages if f"{m}@{pg}" == only]
+    else:
+        pages = random.sample(pages, min(len(pages), int(os.environ.get("HINDSIGHT_SAMPLE") or 20)))
+    since = (datetime.datetime.utcnow() - datetime.timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    unverified = db._req("GET", "/rest/v1/snapshots", params={
+        "select": "market,page,device,captured_at,stats->verify", "captured_at": f"gte.{since}",
+        "stats->verify->>ok": "eq.false", "order": "captured_at.desc", "limit": "200"}) or []
     lines, failed = ["## Visibility check", "", "| Market | Page | Images | Broken | Invisible |", "| --- | --- | --- | --- | --- |"], []
     slots = asyncio.Semaphore(2)
     lock = asyncio.Lock()
@@ -94,12 +102,15 @@ async def main():
         await asyncio.gather(*[check(b, path, m) for path, m in pages])
         await b.close()
     lines.sort()
-    lines += ["", f"{len(failed)} of {len(pages)} pages have more than {ALLOWED} problem images."] + [f"- {f}" for f in failed]
+    lines += ["", f"{len(failed)} of {len(pages)} sampled pages have more than {ALLOWED} problem images."] + [f"- {f}" for f in failed]
+    lines += ["", f"### Captures that failed their check on saving (past 8 days): {len(unverified)}", ""]
+    lines += [f"- {u['captured_at'][:16]} {u['market']} {u['page']} {u['device']}: {'; '.join((u.get('verify') or {}).get('problems', []))}"
+              for u in unverified[:50]]
     md = "\n".join(lines)
     print(md)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8").write(md + "\n")
-    if failed:
+    if failed or unverified:
         raise SystemExit(1)
 
 asyncio.run(main())

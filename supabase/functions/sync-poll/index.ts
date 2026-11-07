@@ -448,6 +448,7 @@ const JOBS: Record<string, { workflow: string; inputs: Record<string, string> }>
   "menu-pages": { workflow: "menu-pages.yml", inputs: {} },
   "capture-svenssons-pages": { workflow: "capture.yml", inputs: { markets: "pages:site:svenssons", devices: "desktop,mobile", reason: "scheduled" } },
   "visibility-check": { workflow: "visibility-check.yml", inputs: {} },
+  "image-check": { workflow: "image-check.yml", inputs: {} },
 };
 
 async function startJob(name: string): Promise<Response> {
