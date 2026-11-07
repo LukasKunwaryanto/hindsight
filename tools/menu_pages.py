@@ -32,31 +32,46 @@ def cda(space, token, path, **q):
 
 
 ERRORS = {}
+_index = {}
+
+
+def page_index(site):
+    """(language, path) -> (entry id, internal name) for every page entry of a site. `urls` is a JSON field
+    (the page's parent entry ids + its path, per language), which Contentful can't filter on, so all page
+    entries are read once with only their ids and urls."""
+    if site in _index:
+        return _index[site]
+    space, _, token_env, _ = SITES[site]
+    token = os.environ.get(token_env, "").strip()
+    idx = {}
+    if token:
+        for t in TYPES:
+            skip = 0
+            while True:
+                try:
+                    res = cda(space, token, "/entries", content_type=t, locale="*", limit=1000, skip=skip,
+                              select="sys.id,fields.urls,fields.internalName")
+                except Exception as e:
+                    ERRORS.setdefault((site, t), str(e)[:200])
+                    break
+                for e in res.get("items", []):
+                    f = e.get("fields", {})
+                    name = next(iter((f.get("internalName") or {}).values()), None)
+                    for lang, urls in (f.get("urls") or {}).items():
+                        for u in urls if isinstance(urls, list) else []:
+                            if isinstance(u, str) and u.startswith("/"):
+                                idx.setdefault((lang, u if u.endswith("/") else u + "/"), (e["sys"]["id"], name))
+                skip += 1000
+                if skip >= res.get("total", 0):
+                    break
+    _index[site] = idx
+    return idx
 
 
 def entries_for(site, lang, paths):
-    """path -> (entry id, internal name), one query per page type for all of a market's paths."""
-    space, _, token_env, _ = SITES[site]
-    token = os.environ.get(token_env, "").strip()
-    out = {}
-    if not token or not paths:
-        return out
-    want = set(paths) | {p.rstrip("/") for p in paths}
-    for t in TYPES:
-        try:
-            # urls = the page's parent entry ids + its path, per language
-            res = cda(space, token, "/entries", content_type=t, locale=lang, limit=200,
-                      **{"fields.urls[in]": ",".join(sorted(want))})
-        except Exception as e:  # e.g. a content type without a urls field
-            msg = getattr(e, "read", lambda: b"")()[:300]
-            ERRORS.setdefault((site, t), f"{e} {msg!r}")
-            continue
-        for e in res.get("items", []):
-            for u in e.get("fields", {}).get("urls") or []:
-                key = u if u.endswith("/") else u + "/"
-                if key in paths and key not in out:
-                    out[key] = (e["sys"]["id"], e.get("fields", {}).get("internalName"))
-    return out
+    idx = page_index(site)
+    default = next((l for (l, _) in idx if l == "yo"), None)  # KitchenTime: most languages use the default
+    return {p: idx.get((lang, p)) or idx.get((default, p)) for p in paths if idx.get((lang, p)) or idx.get((default, p))}
 
 
 markets = db._req("GET", "/rest/v1/markets", params={"select": "locale,url,lang,site", "enabled": "eq.true"})
