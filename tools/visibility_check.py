@@ -26,7 +26,15 @@ def get_blobs(hashes):
     return {h: _blobs[h] for h in hashes if h in _blobs}
 
 CHECK_JS = """async () => {
-  await Promise.all([...document.images].map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; setTimeout(r, 8000); })));
+  const settle = imgs => Promise.all(imgs.map(i => i.complete ? 0 : new Promise(r => { i.onload = i.onerror = r; setTimeout(r, 8000); })));
+  await settle([...document.images]);
+  // retry images that failed once: the storage CDN throttles a check that loads thousands of images quickly
+  const failed = [...document.images].filter(i => i.complete && i.naturalWidth === 0 && i.currentSrc && !i.currentSrc.startsWith('data:'));
+  if (failed.length) {
+    await new Promise(r => setTimeout(r, 3000));
+    failed.forEach(i => { const u = i.currentSrc; i.removeAttribute('loading'); i.src = u + (u.includes('?') ? '&' : '?') + 'retry=1'; });
+    await settle(failed);
+  }
   const W = document.documentElement.clientWidth, out = {broken: [], invisible: [], images: 0};
   for (const i of document.images) {
     const r = i.getBoundingClientRect();
@@ -50,7 +58,7 @@ async def main():
     markets = [m["locale"] for m in db.markets()]
     pages = [("/", m) for m in markets] + [(p["path"], p["market"]) for p in db.pages() if p["market"] in markets]
     lines, failed = ["## Visibility check", "", "| Market | Page | Images | Broken | Invisible |", "| --- | --- | --- | --- | --- |"], []
-    slots = asyncio.Semaphore(4)
+    slots = asyncio.Semaphore(2)
     lock = asyncio.Lock()
 
     async def check(b, path, m):
@@ -78,6 +86,7 @@ async def main():
         b = await p.chromium.launch()
         await asyncio.gather(*[check(b, path, m) for path, m in pages])
         await b.close()
+    lines.sort()
     lines += ["", f"{len(failed)} of {len(pages)} pages have more than {ALLOWED} problem images."] + [f"- {f}" for f in failed]
     md = "\n".join(lines)
     print(md)
