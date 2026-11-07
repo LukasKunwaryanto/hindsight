@@ -48,7 +48,12 @@ CHECK_JS = """async () => {
       if (cs.visibility === 'hidden') hidden = true;
       e = e.parentElement;
     }
-    if (hidden || op < 0.1) out.invisible.push(i.currentSrc.slice(0, 120));
+    if (hidden || op < 0.1) {
+      let z = i; while (z && z.nodeType === 1 && parseFloat(getComputedStyle(z).opacity || '1') >= 0.1 && getComputedStyle(z).visibility !== 'hidden') z = z.parentElement;
+      out.invisible.push(i.currentSrc.slice(0, 120));
+      (out.why = out.why || []).push({y: Math.round(r.top + scrollY), w: Math.round(r.width), el: z ? z.outerHTML.slice(0, 260) : '',
+        sib: z && z.parentElement ? z.parentElement.children.length : 0});
+    }
   }
   return out;
 }"""
@@ -57,6 +62,9 @@ CHECK_JS = """async () => {
 async def main():
     markets = [m["locale"] for m in db.markets()]
     pages = [("/", m) for m in markets] + [(p["path"], p["market"]) for p in db.pages() if p["market"] in markets]
+    only = os.environ.get("HINDSIGHT_ONLY")  # e.g. "en-US@/tableware/" to look at one page
+    if only:
+        pages = [(pg, m) for pg, m in pages if f"{m}@{pg}" == only]
     lines, failed = ["## Visibility check", "", "| Market | Page | Images | Broken | Invisible |", "| --- | --- | --- | --- | --- |"], []
     slots = asyncio.Semaphore(2)
     lock = asyncio.Lock()
@@ -79,6 +87,8 @@ async def main():
             await pg.close()
             bad = len(res["broken"]) + len(res["invisible"])
             lines.append(f"| {m} | {path} | {res['images']} | {len(res['broken'])} | {len(res['invisible'])} |")
+            if os.environ.get("HINDSIGHT_ONLY"):
+                print(__import__("json").dumps(res.get("why", [])[:6], indent=1))
             if bad > ALLOWED:
                 failed.append(f"{m} {path}: {res['broken'][:2]} {res['invisible'][:2]}")
 

@@ -3,6 +3,10 @@ name: Visibility check
 # Are the stored pages' images actually visible when rebuilt? (started weekly by the database scheduler)
 on:
   workflow_dispatch:
+    inputs:
+      only:
+        description: "One page to explain, e.g. en-US@/tableware/ (empty = all pages)"
+        default: ""
 
 permissions:
   contents: read
@@ -24,4 +28,5 @@ jobs:
       - env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          HINDSIGHT_ONLY: ${{ inputs.only }}
         run: python tools/visibility_check.py
