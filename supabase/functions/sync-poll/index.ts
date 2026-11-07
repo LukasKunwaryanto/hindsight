@@ -446,6 +446,7 @@ const JOBS: Record<string, { workflow: string; inputs: Record<string, string> }>
   // inner pages: a monthly pass catches what changes outside Contentful (and Svenssons, which has no key yet)
   "capture-pages-pass": { workflow: "capture.yml", inputs: { markets: "pages", devices: "desktop,mobile", reason: "pass" } },
   "menu-pages": { workflow: "menu-pages.yml", inputs: {} },
+  "capture-svenssons-pages": { workflow: "capture.yml", inputs: { markets: "pages:site:svenssons", devices: "desktop,mobile", reason: "scheduled" } },
   "visibility-check": { workflow: "visibility-check.yml", inputs: {} },
 };
 

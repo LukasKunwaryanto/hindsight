@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       markets:
-        description: "Markets: 'all', comma separated ids (sv-SE,kitchentime:de-DE) or a whole site (site:svenssons,site:kitchentime)"
+        description: "Startpages: 'all', ids (sv-SE,kitchentime:de-DE) or a site (site:svenssons). Inner pages: 'pages', 'pages:menu', 'pages:site:kitchentime' or one page (sv-SE@/nyheter/)"
         default: sv-SE
         required: true
       devices:
@@ -24,7 +24,7 @@ permissions:
 jobs:
   capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
 
