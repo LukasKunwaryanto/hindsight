@@ -1,0 +1,25 @@
+name: Tree lookup
+
+# Debug: are Contentful entries in the tracked content trees?
+on:
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: Comma separated entry ids
+
+permissions:
+  contents: read
+
+jobs:
+  lookup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: python tools/tree_lookup.py "${{ inputs.ids }}"
