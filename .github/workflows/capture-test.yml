@@ -1,45 +1,72 @@
 name: Capture test
 
+# Captures real pages into a throwaway store (not Supabase), twice, and screenshots the rebuilt pages.
 on:
   workflow_dispatch:
     inputs:
-      url:
-        description: Page to capture
-        default: https://www.nordicnest.se/
-        required: true
+      targets:
+        default: "sv-SE,sv-SE@/belysning/,sv-SE@/nyheter/,sv-SE@/inspiration-tips/,kitchentime:sv-SE,kitchentime:sv-SE@/matlagning/"
       devices:
-        description: Devices (comma separated)
-        default: desktop,mobile
-        required: true
+        default: desktop
 
 permissions:
   contents: read
 
 jobs:
-  capture:
+  test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-
-      - name: Install Playwright and Chromium
-        run: |
-          pip install playwright==1.48.0
+          cache: pip
+          cache-dependency-path: capture/requirements.txt
+      - run: |
+          pip install -r capture/requirements.txt
           python -m playwright install --with-deps chromium
-
-      - name: Capture
-        env:
-          HINDSIGHT_BYPASS_HEADER: ${{ secrets.HINDSIGHT_BYPASS_HEADER }}
-        run: python capture/test_capture.py --url "${{ inputs.url }}" --devices "${{ inputs.devices }}" --out results
-
-      - name: Upload screenshots and HTML
+      - name: Capture twice
+        run: |
+          python capture/run.py --markets "${{ inputs.targets }}" --devices "${{ inputs.devices }}" --store memory:store.pkl --rebuild-dir out --reason pass
+          python capture/run.py --markets "${{ inputs.targets }}" --devices "${{ inputs.devices }}" --store memory:store.pkl --reason pass
+      - name: What changed on the second pass
+        run: |
+          python - <<'PY'
+          import pickle, gzip, difflib, sys
+          sys.path.insert(0, "capture")
+          d = pickle.load(open("store.pkl", "rb"))
+          T = lambda h: gzip.decompress(d["blobs"][h][1]).decode() if h in d["blobs"] else ""
+          for s in d["snapshots"]:
+              for c in s["changes"]:
+                  det = c.get("detail") or {}
+                  if not det.get("before"):
+                      continue
+                  a, b = T(det["before"]), T(det["after"])
+                  print("==", s["row"]["market"], s["row"].get("page"), c["kind"], det.get("label"))
+                  sm = difflib.SequenceMatcher(None, a, b)
+                  for op, i1, i2, j1, j2 in sm.get_opcodes():
+                      if op != "equal":
+                          print("  ", op, repr(a[max(0, i1 - 60):i2 + 20][:240]), "->", repr(b[max(0, j1 - 60):j2 + 20][:240]))
+          PY
+      - name: Screenshots
+        run: |
+          python - <<'PY'
+          import asyncio, glob
+          from playwright.async_api import async_playwright
+          async def main():
+              async with async_playwright() as p:
+                  b = await p.chromium.launch()
+                  for f in sorted(glob.glob("out/*.html")):
+                      pg = await b.new_page(viewport={"width": 390 if "-mobile" in f else 1440, "height": 900})
+                      await pg.goto("file://" + __import__("os").path.abspath(f)); await pg.wait_for_timeout(2500)
+                      await pg.screenshot(path=f.replace(".html", ".png"), full_page=True); await pg.close()
+                  await b.close()
+          asyncio.run(main())
+          PY
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
           name: capture-test
-          path: results/
-          retention-days: 7
+          path: out
+          retention-days: 3

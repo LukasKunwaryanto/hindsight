@@ -1,0 +1,26 @@
+name: Menu pages
+
+# Keeps table `pages` in step with each market's menu (started weekly by the database scheduler).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install lxml
+      - env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          CONTENTFUL_DELIVERY_TOKEN: ${{ secrets.CONTENTFUL_DELIVERY_TOKEN }}
+          CONTENTFUL_DELIVERY_TOKEN_KITCHENTIME: ${{ secrets.CONTENTFUL_DELIVERY_TOKEN_KITCHENTIME }}
+          CONTENTFUL_DELIVERY_TOKEN_SVENSSONS: ${{ secrets.CONTENTFUL_DELIVERY_TOKEN_SVENSSONS }}
+        run: python tools/menu_pages.py

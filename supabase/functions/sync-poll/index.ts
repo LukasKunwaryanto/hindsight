@@ -176,10 +176,27 @@ async function startContent(x: Site, fields: Row | null): Promise<Record<string,
   return out;
 }
 
-// ---------- keep the startpage tree current ----------
+// Inner pages (table pages) with a Contentful entry: entry id -> capture targets "market@/path/".
+async function pageRoots(x: Site): Promise<Map<string, string[]>> {
+  const rows: Row[] = await db("GET",
+    `pages?select=market,path,entry_id,markets!inner(site)&enabled=eq.true&entry_id=not.is.null&markets.site=eq.${x.site}`);
+  const out = new Map<string, string[]>();
+  for (const r of rows) out.set(r.entry_id, [...(out.get(r.entry_id) ?? []), `${r.market}@${r.path}`]);
+  return out;
+}
+
+// The tree must know every page root and its targets; rebuild it when a page was added or changed.
+async function rootsChanged(x: Site, roots: Map<string, string[]>): Promise<boolean> {
+  if (!roots.size) return false;
+  const have = await dbGetIn("tree_entries", "entry_id,pages", "entry_id", [...roots.keys()]);
+  const got = new Map(have.map((r) => [r.entry_id, new Set<string>(r.pages ?? [])]));
+  return [...roots].some(([id, ts]) => !got.has(id) || ts.some((t) => !got.get(id)!.has(t)));
+}
+
+// ---------- keep the startpage tree (and the inner pages' trees) current ----------
 async function rebuildTree(x: Site): Promise<number> {
   const START_ID = x.start;
-  const rows: Row[] = await db("GET", `tree_entries?select=entry_id,content_type,links,markets&space_id=eq.${x.space}`);
+  const rows: Row[] = await db("GET", `tree_entries?select=entry_id,content_type,links,markets,pages&space_id=eq.${x.space}`);
   const byId = new Map(rows.map((r) => [r.entry_id, r]));
   const [start] = await db("GET", `tree_entries?select=fields&entry_id=eq.${START_ID}`);
   const content = await startContent(x, start?.fields);
@@ -221,11 +238,52 @@ async function rebuildTree(x: Site): Promise<number> {
     frontier = next;
   }
   marketsOf.set(START_ID, new Set(Object.keys(content)));
-  // save markets that changed (entries no longer reachable get none)
+
+  // inner pages: walk down from each page's own entry (its content in any language)
+  const roots = await pageRoots(x);
+  const pagesOf = new Map<string, Set<string>>();
+  const addP = (id: string, ts: Iterable<string>) => {
+    const s = pagesOf.get(id) ?? new Set<string>(); for (const t of ts) s.add(t); pagesOf.set(id, s);
+  };
+  for (const [id, ts] of roots) addP(id, ts);
+  let pf = [...roots.keys()];
+  const seenP = new Set<string>();
+  for (let depth = 0; depth < 9 && pf.length; depth++) {
+    const todo = [...new Set(pf)].filter((id) => !seenP.has(id));
+    const missing = todo.filter((id) => !byId.has(id));
+    if (missing.length) {
+      const fetched = await fetchEntries(x, missing);
+      const newRows = await Promise.all(fetched.map(async (e) => {
+        const ct = e.sys.contentType.sys.id;
+        return { entry_id: e.sys.id, space_id: x.space, content_type: ct, name: nameOf(e.fields), is_page: PAGE_TYPES.has(ct),
+                 markets: [], fields: null, fingerprints: await fingerprints(e.fields),
+                 ...linksOf(e.fields), revision: e.sys.revision, published_at: e.sys.updatedAt };
+      }));
+      if (newRows.length) {
+        await db("POST", "tree_entries?on_conflict=entry_id", newRows, "return=minimal,resolution=merge-duplicates");
+        inserted += newRows.length;
+        for (const r of newRows) byId.set(r.entry_id, r);
+      }
+    }
+    const next: string[] = [];
+    for (const id of todo) {
+      seenP.add(id);
+      const r = byId.get(id);
+      if (!r || (PAGE_TYPES.has(r.content_type) && !roots.has(id))) continue;  // linked pages are only links
+      for (const child of r.links ?? []) { addP(child, pagesOf.get(id) ?? []); next.push(child); }
+    }
+    pf = next;
+  }
+
+  // save markets and pages that changed (entries no longer reachable get none)
   for (const [id, r] of byId) {
     const want = [...(marketsOf.get(id) ?? [])].sort();
-    if (stable(want) !== stable([...(r.markets ?? [])].sort())) {
-      await db("PATCH", `tree_entries?entry_id=eq.${id}`, { markets: want, updated_at: new Date().toISOString() });
+    const wantP = [...(pagesOf.get(id) ?? [])].sort();
+    const patch: Row = {};
+    if (stable(want) !== stable([...(r.markets ?? [])].sort())) patch.markets = want;
+    if (stable(wantP) !== stable([...(r.pages ?? [])].sort())) patch.pages = wantP;
+    if (Object.keys(patch).length) {
+      await db("PATCH", `tree_entries?entry_id=eq.${id}`, { ...patch, updated_at: new Date().toISOString() });
     }
   }
   return inserted;
@@ -237,6 +295,7 @@ async function poll(x: Site, out: Row) {
   const SPACE = x.space;
   const [state] = await db("GET", `sync_state?select=next_sync_url&space_id=eq.${SPACE}`);
   if (!state?.next_sync_url) { out.note = "Not set up yet: run the 'Contentful setup' workflow on GitHub once."; return; }
+  if (await rootsChanged(x, await pageRoots(x))) out.page_tree = await rebuildTree(x);  // pages added since
 
   const items: Row[] = [];
   let url: string = state.next_sync_url, nextSync = "";
@@ -251,10 +310,14 @@ async function poll(x: Site, out: Row) {
   if (items.length) {
     const def = await defaultOf(x);
     const marketId = (loc: string) => x.prefix + loc;  // tree_entries.markets holds languages; markets are per site
+    // inner pages: "market@/path/" targets; a language-specific change only hits that language's markets
+    const langOf = new Map<string, string>((await db("GET", "markets?select=locale,lang")).map((m: Row) => [m.locale, m.lang ?? m.locale]));
+    const pageHits = (r: Row, locs: Set<string> | null) => (r.pages ?? []).filter((t: string) =>
+      !locs || (def && locs.has(def)) || locs.has(langOf.get(t.split("@")[0]) ?? ""));
     const entryItems = items.filter((i) => i.sys.type === "Entry" || i.sys.type === "DeletedEntry");
     const assetItems = items.filter((i) => i.sys.type === "Asset" || i.sys.type === "DeletedAsset");
     const rows = entryItems.length
-      ? await dbGetIn("tree_entries", "entry_id,space_id,content_type,name,is_page,markets,fields,fingerprints,links",
+      ? await dbGetIn("tree_entries", "entry_id,space_id,content_type,name,is_page,markets,pages,fields,fingerprints,links",
                       "entry_id", [...new Set(entryItems.map((i) => i.sys.id))]).then((rs) => rs.filter((r) => r.space_id === SPACE))
       : [];
     const tree = new Map(rows.map((r) => [r.entry_id, r]));
@@ -270,6 +333,7 @@ async function poll(x: Site, out: Row) {
         changes.push({ entry_id: r.entry_id, content_type: r.content_type, name: r.name, change_type: "unpublish",
                        markets: r.is_page ? [] : r.markets.map(marketId), published_at: it.sys.deletedAt ?? now });
         if (!r.is_page) r.markets.forEach((m: string) => hit.add(marketId(m)));
+        pageHits(r, null).forEach((t: string) => hit.add(t));
         await db("DELETE", `tree_entries?entry_id=eq.${r.entry_id}`);
         treeChanged = true;
         continue;
@@ -288,6 +352,7 @@ async function poll(x: Site, out: Row) {
       let mk: string[] = [];
       if (!r.is_page || r.entry_id === START_ID) mk = def && locs.has(def) ? r.markets : r.markets.filter((m: string) => locs.has(m));
       mk = mk.map(marketId);
+      mk.push(...pageHits(r, locs));
       mk.forEach((m) => hit.add(m));
       changes.push({ entry_id: r.entry_id, content_type: r.content_type, name: nameOf(it.fields),
                      change_type: "publish", markets: mk, published_at: it.sys.updatedAt });
@@ -296,11 +361,12 @@ async function poll(x: Site, out: Row) {
     if (assetItems.length) {  // an image replaced inside an asset the startpage uses
       const ids = [...new Set(assetItems.map((i) => i.sys.id))];
       const users: Row[] = await db("GET",
-        `tree_entries?select=entry_id,markets,is_page,asset_ids&space_id=eq.${SPACE}&asset_ids=ov.${encodeURIComponent(`{${ids.join(",")}}`)}`);
+        `tree_entries?select=entry_id,markets,pages,is_page,asset_ids&space_id=eq.${SPACE}&asset_ids=ov.${encodeURIComponent(`{${ids.join(",")}}`)}`);
       for (const a of assetItems) {
         const mk = new Set<string>();
         for (const u of users) {
           if (!u.is_page && u.asset_ids.includes(a.sys.id)) u.markets.forEach((m: string) => mk.add(marketId(m)));
+          if (u.asset_ids.includes(a.sys.id)) pageHits(u, null).forEach((t: string) => mk.add(t));
         }
         if (!mk.size) continue;
         mk.forEach((m) => hit.add(m));
@@ -314,21 +380,25 @@ async function poll(x: Site, out: Row) {
     if (changes.length) await db("POST", "content_changes", changes);
     out.changes = changes.length;
 
-    // 2. one waiting capture request per affected market and device
+    // 2. one waiting capture request per affected startpage or inner page, and device
     const enabled = new Set((await db("GET", "markets?select=locale&enabled=eq.true")).map((m: Row) => m.locale));
-    const markets = [...hit].filter((m) => enabled.has(m)).sort();
-    out.markets = markets;
-    if (markets.length) {
+    const targets = [...hit].filter((t) => enabled.has(t.split("@")[0])).sort();
+    out.markets = targets;
+    if (targets.length) {
       const now = new Date().toISOString();
-      const waiting: Row[] = await db("GET",
-        `capture_requests?select=id,market,device&status=eq.waiting&market=${encodeURIComponent(inList(markets))}`);
-      const have = new Set(waiting.map((w) => `${w.market}|${w.device}`));
+      const split = (t: string) => ({ market: t.split("@")[0], page: t.includes("@") ? t.slice(t.indexOf("@") + 1) : "/" });
+      const mks = [...new Set(targets.map((t) => split(t).market))];
+      const waiting: Row[] = (await db("GET",
+        `capture_requests?select=id,market,page,device&status=eq.waiting&market=${encodeURIComponent(inList(mks))}`))
+        .filter((w: Row) => targets.includes(w.page === "/" ? w.market : `${w.market}@${w.page}`));
+      const have = new Set(waiting.map((w) => `${w.market}|${w.page}|${w.device}`));
       if (waiting.length) {
         await db("PATCH", `capture_requests?id=${encodeURIComponent(`in.(${waiting.map((w) => w.id).join(",")})`)}`,
                  { last_change_at: now });
       }
-      const fresh = markets.flatMap((m) => DEVICES.filter((d) => !have.has(`${m}|${d}`))
-        .map((d) => ({ market: m, device: d, reason: "contentful", first_change_at: now, last_change_at: now })));
+      const fresh = targets.flatMap((t) => { const { market, page } = split(t); return DEVICES
+        .filter((d) => !have.has(`${market}|${page}|${d}`))
+        .map((d) => ({ market, page, device: d, reason: "contentful", first_change_at: now, last_change_at: now })); });
       if (fresh.length) await db("POST", "capture_requests", fresh);
     }
   }
@@ -345,13 +415,14 @@ async function dispatchDue(out: Row) {
   await db("PATCH", `capture_requests?status=eq.started&started_at=lt.${staleBefore}`,
            { status: "failed", finished_at: new Date().toISOString(), error: `No result within ${STALE_MIN} minutes` });
 
-  const waiting: Row[] = await db("GET", "capture_requests?select=id,market,first_change_at,last_change_at&status=eq.waiting");
+  const waiting: Row[] = await db("GET", "capture_requests?select=id,market,page,first_change_at,last_change_at&status=eq.waiting");
   const due = waiting.filter((w) =>
     now - Date.parse(w.last_change_at) >= QUIET_MIN * 60_000 || now - Date.parse(w.first_change_at) >= MAX_WAIT_MIN * 60_000);
   if (!due.length) return;
-  const markets = [...new Set(due.map((d) => d.market))].sort();
-  // a market's desktop and mobile requests always go together
-  const ids = waiting.filter((w) => markets.includes(w.market)).map((w) => w.id);
+  const target = (w: Row) => (w.page && w.page !== "/" ? `${w.market}@${w.page}` : w.market);
+  const markets = [...new Set(due.map(target))].sort();
+  // a page's desktop and mobile requests always go together
+  const ids = waiting.filter((w) => markets.includes(target(w))).map((w) => w.id);
 
   const r = await fetch(`https://api.github.com/repos/${REPO}/actions/workflows/${WORKFLOW}/dispatches`, {
     method: "POST",
@@ -372,6 +443,10 @@ async function dispatchDue(out: Row) {
 const JOBS: Record<string, { workflow: string; inputs: Record<string, string> }> = {
   "sample-metrics": { workflow: "metrics-mock.yml", inputs: { days_back: "0" } },
   "capture-svenssons": { workflow: "capture.yml", inputs: { markets: "site:svenssons", devices: "desktop,mobile", reason: "scheduled" } },
+  // inner pages: a monthly pass catches what changes outside Contentful (and Svenssons, which has no key yet)
+  "capture-pages-pass": { workflow: "capture.yml", inputs: { markets: "pages", devices: "desktop,mobile", reason: "pass" } },
+  "menu-pages": { workflow: "menu-pages.yml", inputs: {} },
+  "visibility-check": { workflow: "visibility-check.yml", inputs: {} },
 };
 
 async function startJob(name: string): Promise<Response> {
