@@ -73,6 +73,20 @@ SETTLE_JS = """async (maxMs) => {
   }
 }"""
 
+# What a visitor sees, measured the same way on the live page and on its rebuild (verify.py):
+# large images that loaded and are not transparent themselves, and the page height.
+VISIBLE_JS = """() => {
+  const W = document.documentElement.clientWidth;
+  let visible = 0;
+  for (const i of document.images) {
+    const r = i.getBoundingClientRect();
+    if (r.width < 40 || r.height < 40 || r.right < 0 || r.left > W) continue;
+    const cs = getComputedStyle(i);
+    if (i.complete && i.naturalWidth > 0 && parseFloat(cs.opacity || '1') >= 0.1 && cs.visibility !== 'hidden') visible++;
+  }
+  return {images: visible, height: document.documentElement.scrollHeight};
+}"""
+
 WAIT_IMAGES_JS = """async (ms) => {
   const imgs = [...document.images].filter(i => !i.complete);
   await Promise.race([
@@ -152,11 +166,14 @@ async def capture_page(browser, url: str, device: str, locale: str, extra_header
           .filter(e => e && e.event === 'view_promotion' && e.ecommerce)
           .map(e => ({id: String(e.ecommerce.promotion_id || ''), name: String(e.ecommerce.promotion_name || ''),
                       creative: String(e.ecommerce.creative_name || '')}))""")
+        # the live page as a visitor sees it, for checking the stored copy right after it is saved
+        live = await page.evaluate(VISIBLE_JS)
+        live["shot"] = await page.screenshot(type="png")
         frozen = await page.evaluate(FREEZE_JS)
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
         frozen.update(status=status, resources=resources, images_not_loaded=not_loaded, placeholders=placeholders,
-                      promotions=promotions, tracking_blocked=len(blocked))
+                      promotions=promotions, tracking_blocked=len(blocked), live=live)
         return frozen
     finally:
         await ctx.close()

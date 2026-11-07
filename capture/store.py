@@ -257,6 +257,13 @@ class SupabaseStore:
                 out[r["hash"]] = gzip.decompress(bytes.fromhex(r["content"][2:])).decode("utf-8")
         return out
 
+    def public_asset_url(self, h: str, mime: str) -> str:
+        """Stored files live at <bucket>/<first 2 of hash>/<hash>.<ext>: no lookup needed."""
+        return f"{self.url}/storage/v1/object/public/{ASSET_BUCKET}/{h[:2]}/{h}.{EXT.get(mime, 'bin')}"
+
+    def update_snapshot(self, sid: str, **fields):
+        self._req("PATCH", "/rest/v1/snapshots", fields, {"Prefer": "return=minimal"}, params={"id": f"eq.{sid}"})
+
     def asset_url(self, h: str) -> str | None:
         rows = self._req("GET", "/rest/v1/assets", params={"select": "storage_path", "hash": f"eq.{h}"})
         return f"{self.url}/storage/v1/object/public/{ASSET_BUCKET}/{rows[0]['storage_path']}" if rows else None
@@ -349,6 +356,16 @@ class MemoryStore:
 
     def get_blobs(self, hashes):
         return {h: gzip.decompress(self.d["blobs"][h][1]).decode() for h in hashes if h in self.d["blobs"]}
+
+    def public_asset_url(self, h, mime):
+        a = self.d["assets"].get(h)
+        import base64
+        return f"data:{a['mime']};base64," + base64.b64encode(a["bytes"]).decode() if a else ""
+
+    def update_snapshot(self, sid, **fields):
+        for s in self.d["snapshots"]:
+            if s["id"] == sid:
+                s["row"].update(fields)
 
     def asset_bytes(self, h):
         a = self.d["assets"].get(h)

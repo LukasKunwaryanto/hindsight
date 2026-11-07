@@ -1,13 +1,18 @@
 name: Capture test
 
-# Captures real pages into a throwaway store (not Supabase), twice, and screenshots the rebuilt pages.
+# Reference pages (each site's startpage, a category page and an inspiration page, desktop and mobile)
+# captured into a throwaway store (not Supabase) and checked against the live pages. Runs on every change
+# to the capture or rebuild code, so a change that breaks stored pages is caught before it is used.
 on:
+  push:
+    branches: [main]
+    paths: ["capture/**"]
   workflow_dispatch:
     inputs:
       targets:
-        default: "sv-SE,sv-SE@/belysning/,sv-SE@/nyheter/,sv-SE@/inspiration-tips/,kitchentime:sv-SE,kitchentime:sv-SE@/matlagning/"
+        default: "sv-SE,sv-SE@/belysning/,sv-SE@/inspiration-tips/,de-DE@/neuheiten/,kitchentime:sv-SE,kitchentime:sv-SE@/matlagning/,svenssons:sv-SE,svenssons:sv-SE@/mobler/"
       devices:
-        default: desktop
+        default: desktop,mobile
 
 permissions:
   contents: read
@@ -15,7 +20,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -28,8 +33,10 @@ jobs:
           python -m playwright install --with-deps chromium
       - name: Capture twice
         run: |
-          python capture/run.py --markets "${{ inputs.targets }}" --devices "${{ inputs.devices }}" --store memory:store.pkl --rebuild-dir out --reason pass
-          python capture/run.py --markets "${{ inputs.targets }}" --devices "${{ inputs.devices }}" --store memory:store.pkl --reason pass
+          T="${{ inputs.targets || 'sv-SE,sv-SE@/belysning/,sv-SE@/inspiration-tips/,de-DE@/neuheiten/,kitchentime:sv-SE,kitchentime:sv-SE@/matlagning/,svenssons:sv-SE,svenssons:sv-SE@/mobler/' }}"
+          D="${{ inputs.devices || 'desktop,mobile' }}"
+          python capture/run.py --markets "$T" --devices "$D" --store memory:store.pkl --rebuild-dir out --reason pass --strict-verify
+          python capture/run.py --markets "$T" --devices "$D" --store memory:store.pkl --reason pass
       - name: What changed on the second pass
         run: |
           python - <<'PY'

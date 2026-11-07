@@ -21,6 +21,7 @@ from browser import capture_page  # noqa: E402
 from rebuild import data_uri, rebuild  # noqa: E402
 from describe import ASSET_RE, NOISE, SITE_PARTS, _kind_of_edit, describe_changes, module_info
 from snapshot import build, source_path  # noqa: E402
+from verify import verify  # noqa: E402
 from store import MemoryStore, SupabaseStore  # noqa: E402
 
 FALLBACK_MARKETS = {loc: f"https://www.nordicnest.{tld}/" for loc, tld in [
@@ -49,7 +50,20 @@ async def capture_one(browser, store, market, url, device, reason, rebuild_dir, 
             if frozen.get("placeholders"):  # product data never arrived: try the page once more
                 print(f"{market} {device}: {frozen['placeholders']} placeholders left, capturing again", flush=True)
                 frozen = await capture_page(browser, url, device, lang, os.environ.get("HINDSIGHT_BYPASS_HEADER"))
-            return await asyncio.to_thread(finish, store, market, url, device, rid, frozen, t0, rebuild_dir, page, kind, reason)
+            r = await asyncio.to_thread(finish, store, market, url, device, rid, frozen, t0, rebuild_dir, page, kind, reason)
+            if r.get("_stored") and frozen.get("live"):
+                # check the stored copy once against what the live page showed
+                stored = r.pop("_stored")
+                try:
+                    html = await asyncio.to_thread(rebuild, stored["manifest"], store.get_blobs, store.public_asset_url,
+                                                   store.product_images)
+                    v = await verify(browser, html, device, frozen["live"])
+                except Exception as e:
+                    v = {"ok": False, "problems": [f"check failed: {e}"[:200]]}
+                await asyncio.to_thread(store.update_snapshot, r["snapshot"], stats={**stored["stats"], "verify": v})
+                r["verify"] = "ok" if v["ok"] else "; ".join(v["problems"])
+            r.pop("_stored", None)
+            return r
         except Exception as e:
             traceback.print_exc()
             try:
@@ -157,10 +171,10 @@ def finish(store, market, url, device, rid, frozen, t0, rebuild_dir, page="/", k
         urls = {h: a["url"] for h, a in P.assets.items()}
         urls.update(store.asset_urls([h for h in hashes if h not in urls]))
         # Content changes only: products in grids and badges are product data, not page content. A carousel
-        # showing other products counts only when a Contentful publish caused this capture. Inner pages keep
-        # their site bars in their own timeline (site_parts), so a bar change doesn't store the page again.
+        # showing other products counts only when a Contentful publish caused this capture. Site bars, header
+        # and footer have their own timeline (site_parts), so a bar change doesn't store any page again.
         changes, summary = describe_changes(prev_mods, modules, texts, urls, products_are_noise=reason != "contentful",
-                                            ignore_site_parts=page != "/")
+                                            ignore_site_parts=True)
         if prev_manifest and summary["change_size"] == "none":
             # Nothing visible changed: keep the previous snapshot, store nothing new
             store.update_request(rid, status="done", finished_at="now()")
@@ -204,6 +218,7 @@ def finish(store, market, url, device, rid, frozen, t0, rebuild_dir, page="/", k
 
         new_total = sum(stats["new_bytes"].values())
         return {"market": market, "page": page, "device": device, "ok": True, "snapshot": sid, "changes": len(changes),
+                "_stored": {"manifest": manifest, "stats": stats},
                 "new_kb": round(new_total / 1024, 1), "summary": f"{summary['change_size']}: {summary['change_title']}", **{k: stats[k] for k in ("seconds", "blocks", "cards", "images_not_loaded")}}
     except Exception as e:
         traceback.print_exc()
@@ -226,6 +241,7 @@ async def main():
     ap.add_argument("--reason", default="manual")
     ap.add_argument("--rebuild-dir", default=None)
     ap.add_argument("--parallel", type=int, default=4, help="pages captured at the same time")
+    ap.add_argument("--strict-verify", action="store_true", help="fail when a stored page doesn't match the live page")
     args = ap.parse_args()
 
     store = make_store(args.store)
@@ -276,23 +292,24 @@ async def main():
     results.sort(key=lambda r: (order.get((r["market"], r.get("page", "/")), 99), r["device"]))
 
     lines = ["## Hindsight captures", "",
-             "| Market | Page | Device | Result | Seconds | Blocks | Cards | New KB | Changes | Images not loaded |",
-             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
+             "| Market | Page | Device | Result | Seconds | Blocks | Cards | New KB | Changes | Images not loaded | Check |",
+             "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
     for r in results:
         if r["ok"]:
             lines.append(f"| {r['market']} | {r.get('page', '/')} | {r['device']} | {r.get('summary', 'OK')} | {r['seconds']} | "
-                         f"{r['blocks']} | {r['cards']} | {r['new_kb']} | {r['changes']} | {r['images_not_loaded']} |")
+                         f"{r['blocks']} | {r['cards']} | {r['new_kb']} | {r['changes']} | {r['images_not_loaded']} | {r.get('verify', '')} |")
         else:
             lines.append(f"| {r['market']} | {r.get('page', '/')} | {r['device']} | **FAILED**: {r.get('error', '')} | "
                          f"{r.get('seconds', '')} | | | | | |")
     ok = sum(r["ok"] for r in results)
-    lines += ["", f"{ok} of {len(results)} captures succeeded."]
+    bad = [r for r in results if r.get("verify") not in (None, "ok")]
+    lines += ["", f"{ok} of {len(results)} captures succeeded. {len(bad)} stored pages differ from the live page."]
     md = "\n".join(lines)
     print(md)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
             f.write(md + "\n")
-    if ok < len(results):
+    if ok < len(results) or (args.strict_verify and bad):
         raise SystemExit(1)
 
 
