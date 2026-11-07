@@ -39,13 +39,18 @@ def entry_for(site, lang, path):
     for t in TYPES:
         for value in (path, path.rstrip("/")):
             try:
+                # urls = the page's parent entry ids + its path, per language
                 res = cda(space, token, "/entries", content_type=t, locale=lang, limit=1, **{"fields.urls": value},
-                          select="sys.id,fields.name,fields.internalName")
+                          select="sys.id,fields.internalName")
             except Exception:
-                continue
+                try:  # content types without internalName
+                    res = cda(space, token, "/entries", content_type=t, locale=lang, limit=1, **{"fields.urls": value},
+                              select="sys.id")
+                except Exception:
+                    continue
             if res.get("items"):
                 f = res["items"][0].get("fields", {})
-                return res["items"][0]["sys"]["id"], f.get("name") or f.get("internalName")
+                return res["items"][0]["sys"]["id"], f.get("internalName")
     return None, None
 
 
