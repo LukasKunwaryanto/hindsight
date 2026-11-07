@@ -1,0 +1,38 @@
+name: Grid compare
+
+# A listing grid on the live site next to the same grid as stored (slim placeholder cards).
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        default: "sv-SE@/belysning/"
+      url:
+        default: "https://www.nordicnest.se/belysning/"
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: capture/requirements.txt
+      - run: |
+          pip install -r capture/requirements.txt
+          python -m playwright install --with-deps chromium
+      - run: |
+          for d in desktop mobile; do
+            python capture/run.py --markets "${{ inputs.target }}" --devices $d --store memory:store-$d.pkl --rebuild-dir out-$d --reason pass
+            python tools/grid_compare.py store-$d.pkl "$(ls out-$d/*.html | head -1)" "${{ inputs.url }}" $d out/grid-$d
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grid-compare
+          path: out
+          retention-days: 3
