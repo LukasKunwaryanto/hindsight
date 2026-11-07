@@ -73,7 +73,9 @@ def site_lead(store, market, device):
 
 
 def record_site_parts(store, market, device, manifest, P):
-    """Keep the site bars (header, bars, footer) as their own timeline per market and device."""
+    """Keep the site bars (header, bars, footer) as their own timeline per market and device. Recorded from
+    startpage captures only: other page types render the same bars with page-specific markup (a hidden
+    mobile menu filled in or not), which would look like a change every time."""
     parts = [{"label": m["label"], "ref": m["ref"]} for m in manifest["modules"] if m["label"] in SITE_PARTS]
     prev = store.latest_site_parts(market, device)
     if not parts or prev == parts:
@@ -83,8 +85,8 @@ def record_site_parts(store, market, device, manifest, P):
         texts = store.get_blobs(sorted({h for pair in changed for h in pair} - set(P.blobs)))
         texts.update({h: P.blobs[h][1] for pair in changed for h in pair if h in P.blobs})
         urls = {h: a["url"] for h, a in P.assets.items()}
-        if all(_kind_of_edit(texts.get(a, ""), texts.get(b, ""), urls, "chrome") in NOISE for a, b in changed):
-            return False
+        if all(_kind_of_edit(texts.get(a, ""), texts.get(b, ""), urls, "chrome") in NOISE + ("style",) for a, b in changed):
+            return False  # nothing a visitor would notice: same texts and images
     # the parts' pieces must exist even if the page itself isn't stored this time
     need = {p["ref"] for p in parts}
     for _ in range(3):  # bars hold nested pieces (e.g. card parts) and images
@@ -109,7 +111,7 @@ def finish(store, market, url, device, rid, frozen, t0, rebuild_dir, page="/", k
         key_page = page == "/" or kind == "menu"
         manifest, modules, P = build(frozen, url, store.known_assets(paths),
                                      site_lead=None if page == "/" else site_lead(store, market, device), key_page=key_page)
-        bars_changed = record_site_parts(store, market, device, manifest, P)
+        bars_changed = record_site_parts(store, market, device, manifest, P) if page == "/" else False
 
         # Prices: keep the first price seen per SKU and market (accuracy not needed)
         skus = [c["sku"] for c in manifest["cards"] if c.get("price")]
