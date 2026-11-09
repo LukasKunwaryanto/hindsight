@@ -102,7 +102,7 @@ def _keyed(mods):
 
 
 def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, str], asset_urls: dict | None = None,
-                     products_are_noise: bool = False, ignore_site_parts: bool = False):
+                     products_are_noise: bool = False, ignore_site_parts: bool = False, page_title: str = ""):
     """Compare two snapshots' blocks.
 
     prev/cur: module rows (position, label, entry_id, blob_hash, title).
@@ -110,13 +110,14 @@ def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, 
     products_are_noise: a carousel showing other products is not a change (captures not caused by a
       Contentful publish: there it is usually a recommendation or bestseller list rotating).
     ignore_site_parts: bars, header and footer are kept in their own timeline (inner pages).
+    page_title: the page's <title>, named in a first capture when no block has a headline.
     Returns (changes, summary) where summary = {change_size, change_title, change_description}.
     """
     if prev is None:
-        hero = next((m for m in cur if m["label"].startswith("block:") and m.get("entry_id")), None)
+        hero = next((m for m in cur if m["label"].startswith("block:") and m.get("entry_id") and m.get("title")), None)
         return ([{"kind": "added", "entry_id": None, "position": None, "detail": {"note": "first snapshot"}}],
-                {"change_size": "big", "change_title": "First capture",
-                 "change_description": (hero or {}).get("title") or ""})
+                {"change_size": "big", "change_title": FIRST_TITLE,
+                 "change_description": _clean((hero or {}).get("title") or page_name(page_title), 80)})
 
     # rank of each content block on the page (spacers and header/footer don't count)
     def ranks(mods):
@@ -184,19 +185,67 @@ def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, 
     title, desc = "No visible change", ""
     if main:
         c = main[0]
-        hero = c.get("rank") == 0
-        names = {"replaced": "New hero" if hero else "New banner", "added": "Banner added", "removed": "Banner removed",
-                 "image": "New hero image" if hero else "New image", "text": "Text edit", "style": "Style tweak",
-                 "products": "Products changed",
-                 "moved": "Reordered"}
-        title = names.get(c["kind"], "Change")
-        others = len([x for x in (content or changes) if x is not c and x["kind"] not in ("moved", "style")])
-        if others:
-            title += f" +{others}"
         d = c.get("detail", {})
-        desc = d.get("title") or (f"was {d['was']}" if d.get("was") else "")
-        if c["kind"] == "removed" and d.get("title"):
-            desc = f"was {d['title']}"
+        others = len([x for x in (content or changes) if x is not c and x["kind"] not in ("moved", "style")])
+        title, desc = headline(c["kind"], c.get("rank") == 0, d.get("title", ""), d.get("was", ""), others)
     for c in changes:
         c.pop("rank", None)
-    return changes, {"change_size": size, "change_title": title, "change_description": _clean(desc, 80)}
+    return changes, {"change_size": size, "change_title": title, "change_description": desc}
+
+
+# --- names in the timeline: what happened (title) + what it is about (description) -------------
+FIRST_TITLE = "Archive starts"
+
+
+def page_name(title: str) -> str:
+    """'Nyheter | Nordic Nest' -> 'Nyheter'."""
+    return re.split(r"\s+[|–—-]\s+", title or "")[0].strip()
+
+
+def headline(kind: str, hero: bool, head: str, was: str = "", others: int = 0) -> tuple[str, str]:
+    """Title and description for the main change of a snapshot.
+    head = visible headline of the changed block, was = the one it replaced."""
+    names = {"replaced": "New hero" if hero else "New banner", "added": "Banner added", "removed": "Banner removed",
+             "image": "New hero image" if hero else "New image", "text": "Text updated", "style": "Style updated",
+             "products": "Products changed", "moved": "Reordered"}
+    title = names.get(kind, "Change")
+    head, was = _clean(head, 48), _clean(was, 28)
+    if kind == "replaced" and was and was != head:
+        desc = f"{head} (was {was})" if head else f"was {was}"
+    else:
+        desc = head
+    more = f"{others} more change{'s' if others > 1 else ''}" if others else ""
+    if more:
+        desc = f"{_clean(desc, 80 - len(more) - 3)} · {more}" if desc else more
+    return title, _clean(desc, 80)
+
+
+OLD_NAMES = {"First capture": FIRST_TITLE, "Text edit": "Text updated", "Style tweak": "Style updated"}
+KIND_OF = {"New hero": ("replaced", True), "New banner": ("replaced", False), "Banner added": ("added", False),
+           "Banner removed": ("removed", False), "New hero image": ("image", True), "New image": ("image", False),
+           "Text updated": ("text", False), "Style updated": ("style", False), "Products changed": ("products", False),
+           "Reordered": ("moved", False)}
+
+
+def rename(title: str, desc: str, changes: list[dict], page_title: str = ""):
+    """New-style name for a snapshot named the old way ("First capture", "New banner +3", desc "was X").
+    Returns (title, description), or None when it already has a new-style name."""
+    m = re.match(r"^(.*?)(?: \+(\d+))?$", title or "")
+    base, others = m.group(1), int(m.group(2) or 0)
+    old = bool(m.group(2)) or base in OLD_NAMES
+    base = OLD_NAMES.get(base, base)
+    if base == FIRST_TITLE:
+        return (FIRST_TITLE, _clean(desc or page_name(page_title), 80)) if old else None
+    if base not in KIND_OF:
+        return None
+    kind, hero = KIND_OF[base]
+    if kind == "removed" and (desc or "").startswith("was "):
+        old, desc = True, desc[4:]
+    was = ""
+    if kind == "replaced" and desc and "(was " not in desc:
+        was = next((c.get("detail", {}).get("was", "") for c in changes or []
+                    if c.get("kind") == "replaced" and _clean(c.get("detail", {}).get("title", ""), 60) == desc), "")
+        old = old or bool(was)
+    if kind == "replaced" and (desc or "").startswith("was "):
+        desc, was = "", desc[4:]
+    return headline(kind, hero, desc or "", was, others) if old else None

@@ -181,7 +181,7 @@ def finish(store, market, url, device, rid, frozen, t0, rebuild_dir, page="/", k
         # showing other products counts only when a Contentful publish caused this capture. Site bars, header
         # and footer have their own timeline (site_parts), so a bar change doesn't store any page again.
         changes, summary = describe_changes(prev_mods, modules, texts, urls, products_are_noise=reason != "contentful",
-                                            ignore_site_parts=True)
+                                            ignore_site_parts=True, page_title=frozen.get("title", ""))
         if prev_manifest and summary["change_size"] == "none":
             # Nothing visible changed: keep the previous snapshot, store nothing new
             store.update_request(rid, status="done", finished_at="now()")
