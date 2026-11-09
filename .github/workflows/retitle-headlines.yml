@@ -1,0 +1,29 @@
+name: Retitle headlines
+
+# One-off: re-reads block headlines without buttons, links and footnotes, and updates titles and descriptions.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "List the renames without writing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  retitle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r capture/requirements.txt
+      - env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        run: python tools/retitle_headlines.py

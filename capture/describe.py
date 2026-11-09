@@ -31,8 +31,47 @@ def _clean(s: str, n: int = 60) -> str:
     return s if len(s) <= n else s[: n - 1].rstrip() + "…"
 
 
+def _is_cta(node) -> bool:
+    """A button, or a link that is not part of running text (a hero's "SHOP NOW")."""
+    if node.tag == "button":
+        return True
+    if node.tag != "a":
+        return False
+    par = node.getparent()
+    if par is None:
+        return True
+    around = (par.text or "") + "".join((c.tail or "") for c in par)
+    return not around.strip()
+
+
+def _headline_text(el) -> str:
+    """Visible text of a headline element, without buttons, call-to-action links and footnotes ("*Valid until …").
+    A drop cap stored as its own letter ("S" + "candinavisch") is joined back to its word."""
+    parts = []
+
+    def walk(node):
+        if node.text and node.text.strip():
+            parts.append(node.text.strip())
+        for c in node:
+            if isinstance(c.tag, str) and not _is_cta(c):
+                walk(c)
+            if c.tail and c.tail.strip():
+                parts.append(c.tail.strip())
+    walk(el)
+    out = []
+    for t in parts:
+        if t.startswith("*"):
+            continue
+        if out and len(out[-1]) == 1 and out[-1].isalpha() and t[:1].islower():
+            out[-1] += t
+        else:
+            out.append(t)
+    return " ".join(out)
+
+
 def module_info(html: str) -> dict:
-    """Headline and contained Contentful IDs of one stored block."""
+    """Headline and contained Contentful IDs of one stored block.
+    The headline is the first heading, else the first paragraph with text, left out: buttons, links, footnotes."""
     try:
         el = lxml.html.fromstring(html)
     except Exception:
@@ -41,7 +80,9 @@ def module_info(html: str) -> dict:
     title = ""
     for xp in ("//h1", "//h2", "//h3", "//*[contains(@class,'title')]", "//p"):
         for h in el.xpath(xp):
-            t = _clean(_text(h))
+            if any(a.tag == "button" for a in h.iterancestors()):
+                continue
+            t = _clean(_headline_text(h))
             if len(t) >= 2:
                 title = t
                 break
