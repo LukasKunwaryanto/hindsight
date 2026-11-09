@@ -209,15 +209,11 @@ def headline(kind: str, hero: bool, head: str, was: str = "", others: int = 0) -
              "image": "New hero image" if hero else "New image", "text": "Text updated", "style": "Style updated",
              "products": "Products changed", "moved": "Reordered"}
     title = names.get(kind, "Change")
-    was = _clean(was, 28)
-    head = _clean(head, 48 if was and kind == "replaced" else 80)
-    if kind == "replaced" and was and was != head:
-        desc = f"{head} (was {was})" if head else f"was {was}"
-    else:
-        desc = head
+    was = _clean(was, 28) if kind == "replaced" and was and was != head else ""
     more = f"{others} more change{'s' if others > 1 else ''}" if others else ""
-    if more:
-        desc = f"{_clean(desc, 80 - len(more) - 3)} · {more}" if desc else more
+    tail = (f" (was {was})" if was else "") + (f" · {more}" if more else "")
+    head = _clean(head, max(20, 80 - len(tail)))
+    desc = (head + tail) if head else (f"was {was}" if was else "") + (f" · {more}" if more and was else more)
     return title, _clean(desc, 80)
 
 
