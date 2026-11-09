@@ -98,9 +98,12 @@ def fix_desc(title: str, desc: str):
     if title not in KIND_OF:
         return desc
     head, was, more = DESC_RE.match(desc).groups()
-    if head.startswith("was ") and not was:
-        head, was = "", head[4:]
     kind, hero = KIND_OF[title]
+    if head.startswith("was ") and not was:
+        if kind == "replaced":
+            head, was = "", head[4:]
+        else:  # the block had no headline of its own: described by the one it had before
+            return headline(kind, hero, "was " + m(head[4:]), "", int(more or 0))[1]
     return headline(kind, hero, m(head or ""), m(was or ""), int(more or 0))[1]
 
 
