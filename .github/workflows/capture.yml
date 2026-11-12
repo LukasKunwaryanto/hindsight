@@ -37,7 +37,12 @@ jobs:
       - name: Install
         run: |
           pip install -r capture/requirements.txt
-          python -m playwright install --with-deps chromium
+          # the runner's package mirror sometimes fails for a few minutes: try again before giving up
+          for i in 1 2 3 4; do
+            python -m playwright install --with-deps chromium && break
+            [ "$i" = 4 ] && exit 1
+            echo "Browser install failed, retrying in $((i * 30)) s"; sleep $((i * 30))
+          done
 
       - name: Capture and store
         env:

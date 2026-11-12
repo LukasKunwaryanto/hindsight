@@ -61,6 +61,15 @@ class SupabaseStore:
                     time.sleep(2 * (attempt + 1))
                     continue
                 raise RuntimeError(f"Supabase {method} {path} -> HTTP {e.code}: {msg}") from None
+            except (urllib.error.URLError, ConnectionError, TimeoutError, OSError) as e:
+                # a dropped connection (e.g. SSL EOF): repeat requests that are safe to send twice —
+                # reads, updates, and inserts that ignore or merge duplicates
+                safe = method in ("GET", "HEAD", "PATCH", "DELETE") or "resolution=" in h.get("Prefer", "")
+                if safe and attempt < 3:
+                    print(f"  retry after network error: {method} {path}: {e}", flush=True)
+                    time.sleep(3 * (attempt + 1))
+                    continue
+                raise
 
     def _existing(self, table: str, hashes: list[str]) -> set[str]:
         found = set()

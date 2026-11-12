@@ -415,6 +415,8 @@ async function dispatchDue(out: Row) {
   await db("PATCH", `capture_requests?status=eq.started&started_at=lt.${staleBefore}`,
            { status: "failed", finished_at: new Date().toISOString(), error: `No result within ${STALE_MIN} minutes` });
 
+  await retryFailed(now);
+
   const waiting: Row[] = await db("GET", "capture_requests?select=id,market,page,first_change_at,last_change_at&status=eq.waiting");
   const due = waiting.filter((w) =>
     now - Date.parse(w.last_change_at) >= QUIET_MIN * 60_000 || now - Date.parse(w.first_change_at) >= MAX_WAIT_MIN * 60_000);
@@ -434,6 +436,22 @@ async function dispatchDue(out: Row) {
   await db("PATCH", `capture_requests?id=${encodeURIComponent(`in.(${ids.join(",")})`)}`,
            { status: "started", started_at: new Date().toISOString() });
   out.dispatched = markets;
+}
+
+// A Contentful capture that failed (GitHub runner trouble, a dropped connection) is tried once more, unless the
+// same page has had a newer request since. A retry that fails is not retried again.
+const RETRY_WITHIN_H = 24;
+async function retryFailed(now: number) {
+  const since = new Date(now - RETRY_WITHIN_H * 3600_000).toISOString();
+  const recent: Row[] = await db("GET",
+    `capture_requests?select=market,page,device,status,reason,created_at&created_at=gt.${since}&order=created_at`);
+  const latest = new Map<string, Row>();
+  for (const r of recent) latest.set(`${r.market}|${r.page}|${r.device}`, r);
+  const due = new Date(now - QUIET_MIN * 60_000).toISOString();
+  const retry = [...latest.values()]
+    .filter((r) => r.status === "failed" && r.reason === "contentful")
+    .map((r) => ({ market: r.market, page: r.page, device: r.device, reason: "retry", first_change_at: due, last_change_at: due }));
+  if (retry.length) await db("POST", "capture_requests", retry);
 }
 
 // ---------- scheduled GitHub jobs ----------
