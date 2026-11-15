@@ -114,6 +114,29 @@ def _encode_image(raw: bytes, ct: str, width: float | None, mask: bool):
     return buf.getvalue(), "image/avif", *size
 
 
+
+def product_key(card) -> str:
+    """The product a card shows: its variant id (SKU), else its product page path. Some cards link without
+    a variantId (e.g. products with one variant, or links kept in data-nn-spa-url), which used to make them all
+    'unknown' and share one image."""
+    links = card.xpath('.//a[@data-test-id="product-link"]') or card.xpath(".//a[@href or @data-nn-spa-url]")
+    urls = [u for a in links for u in (a.get("href"), a.get("data-nn-spa-url")) if u]
+    for u in urls:
+        m = re.search(r"variantId=([^&\"]+)", u)
+        if m:
+            return m.group(1)
+    for attr in ("data-variant-id", "data-sku", "data-product-id"):
+        v = card.get(attr) or next(iter(card.xpath(f".//@{attr}")), None)
+        if v:
+            return str(v)
+    for u in urls:
+        path = re.sub(r"^https?://[^/]+", "", u).split("?")[0].split("#")[0].rstrip("/")
+        if path:
+            return "url:" + path
+    if os.environ.get("HINDSIGHT_DEBUG_CARDS"):
+        print("  card without product key:", lxml.html.tostring(card, encoding="unicode")[:600], flush=True)
+    return "unknown"
+
 def build(frozen: dict, page_url: str, known_assets: dict | None = None, site_lead: int | None = None,
           key_page: bool = False) -> tuple[dict, list[dict], Pieces]:
     """Split a frozen page. Returns (manifest, module rows, pieces).
@@ -273,9 +296,7 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None, site_le
             continue
         if grid_h is None and h and h.isdigit():
             grid_h = int(h)
-        href = (card.xpath('.//a[@data-test-id="product-link"]/@href') or [""])[0]
-        m = re.search(r"variantId=([^&\"]+)", href)
-        sku = m.group(1) if m else "unknown"
+        sku = product_key(card)
         img = (card.xpath(".//img/@src") or [""])[0]
         if img and not img.startswith("data:"):
             P.grid_images.setdefault(sku, img)
@@ -289,9 +310,7 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None, site_le
     cards = []
     seen_sku: dict[str, int] = {}
     for i, card in enumerate(doc.xpath('//*[@data-test-id="product-card"]')):
-        href = (card.xpath('.//a[@data-test-id="product-link"]/@href') or [""])[0]
-        m = re.search(r"variantId=([^&\"]+)", href)
-        sku = m.group(1) if m else "unknown"
+        sku = product_key(card)
         for part in card.xpath(".//*[@data-test-id]"):
             if part.get("data-test-id") in CARD_PARTS:
                 placeholder(part, f'<hs-module ref="{P.blob("part", frag(part))}"></hs-module>')

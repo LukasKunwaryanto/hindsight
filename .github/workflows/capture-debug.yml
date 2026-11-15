@@ -32,6 +32,7 @@ jobs:
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
           HINDSIGHT_BYPASS_HEADER: ${{ secrets.HINDSIGHT_BYPASS_HEADER }}
           HINDSIGHT_MANIFEST_V2: "1"
+          HINDSIGHT_DEBUG_CARDS: "1"
         run: python capture/run.py --markets "${{ inputs.markets }}" --devices "${{ inputs.devices }}" --reason manual --rebuild-dir debug
       - if: always()
         uses: actions/upload-artifact@v4
