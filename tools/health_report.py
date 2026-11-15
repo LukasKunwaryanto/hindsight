@@ -42,6 +42,7 @@ titles = Counter()
 titles_by_type = defaultdict(Counter)
 verify = Counter()
 verify_problems = Counter()
+verify_failed = []
 new_bytes = defaultdict(float)
 for s in snaps:
     day, t = s["captured_at"][:10], ptype(s["market"], s["page"])
@@ -54,13 +55,16 @@ for s in snaps:
         verify["ok" if v.get("ok") else "problem"] += 1
         for p in v.get("problems") or []:
             verify_problems[re.sub(r"\d+(\.\d+)?", "#", p)[:80]] += 1
+        if not v.get("ok"):
+            verify_failed.append({"market": s["market"], "page": s["page"], "device": s["device"], "at": s["captured_at"][:16],
+                                  "id": s["id"], "problems": v.get("problems"), "live": v.get("live"), "got": v.get("got")})
     else:
         verify["not checked"] += 1
     nb = s.get("new_bytes") or {}
     new_bytes[day] += sum(x or 0 for x in nb.values())
 out["snapshots"] = {"total": len(snaps), "per_day": {d: dict(c) for d, c in sorted(per_day.items())},
                     "titles": titles.most_common(), "titles_by_type": {t: c.most_common(8) for t, c in titles_by_type.items()},
-                    "verify": dict(verify), "verify_problems": verify_problems.most_common(10),
+                    "verify": dict(verify), "verify_problems": verify_problems.most_common(10), "verify_failed": verify_failed,
                     "new_mb_per_day": {d: round(b / 1e6, 2) for d, b in sorted(new_bytes.items())}}
 
 # ---------- capture requests ----------
