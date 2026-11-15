@@ -16,11 +16,13 @@ for r in rows:
     grid = r.get("grid") or []
     if not grid:
         continue
-    imgs = db._req("GET", "/rest/v1/product_images", params={"select": "sku,src,asset", "sku": f"in.({','.join(sorted(set(grid))[:150])})"}) or []
+    imgs = db._req("GET", "/rest/v1/product_images", params={"select": "sku,src,asset", "sku": f"in.({','.join(sorted(set(grid) - {'unknown'})[:150])})"}) or []
     have = {i["sku"]: (i.get("asset") or i.get("src") or "") for i in imgs}
     out.append({"id": r["id"], "market": r["market"], "page": r["page"], "device": r["device"], "at": r["captured_at"][:16],
                 "ok": v.get("ok"), "problems": v.get("problems"), "live": v.get("images_live"), "stored": v.get("images_stored"),
-                "grid": len(grid), "no_row": sum(1 for s in set(grid) if s not in have),
+                "grid": len(grid), "unknown": grid.count("unknown"),
+                "no_image_slots": sum(1 for s in grid if not have.get(s)),
+                "no_row": sum(1 for s in set(grid) if s not in have),
                 "empty_src": sum(1 for s in set(grid) if s in have and not have[s]),
                 "sample_srcs": [have.get(s) for s in grid[:3]], "sample_skus": grid[:5]})
 bad = [o for o in out if o["ok"] is False]
