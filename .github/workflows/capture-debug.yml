@@ -12,8 +12,8 @@ on:
         default: desktop
         required: true
       store:
-        description: "supabase (stores for real) or memory (test only, nothing saved)"
-        default: memory
+        description: "supabase (stores for real) or memory:debug/store (test only, nothing saved)"
+        default: memory:debug/store
         required: true
 
 permissions:
