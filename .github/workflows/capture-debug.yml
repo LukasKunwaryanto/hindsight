@@ -1,0 +1,41 @@
+name: Capture debug
+
+# Captures pages like the normal capture (and stores them), and keeps the rebuilt page and the check
+# screenshots (live vs stored) as a downloadable artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      markets:
+        description: "Same as Capture, e.g. kitchentime:fi-FI@/kattaus-tarjoilu/"
+        required: true
+      devices:
+        default: desktop
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install -r capture/requirements.txt
+          python -m playwright install --with-deps chromium
+      - env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          HINDSIGHT_BYPASS_HEADER: ${{ secrets.HINDSIGHT_BYPASS_HEADER }}
+          HINDSIGHT_MANIFEST_V2: "1"
+        run: python capture/run.py --markets "${{ inputs.markets }}" --devices "${{ inputs.devices }}" --reason manual --rebuild-dir debug
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug
+          path: debug
+          retention-days: 3
