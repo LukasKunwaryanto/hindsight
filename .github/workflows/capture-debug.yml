@@ -16,8 +16,8 @@ on:
         default: "1"
         required: true
       store:
-        description: "supabase (stores for real) or memory:debug/store (test only, nothing saved)"
-        default: memory:debug/store
+        description: "supabase (stores for real) or memory:debug/store.json (test only, nothing saved)"
+        default: memory:debug/store.json
         required: true
 
 permissions:
@@ -42,7 +42,7 @@ jobs:
           HINDSIGHT_MANIFEST_V2: "1"
           HINDSIGHT_DEBUG_CARDS: "1"
         run: |
-          mkdir -p debug/store
+          mkdir -p debug
           for i in $(seq ${{ inputs.repeat }}); do
             echo "### Round $i"
             python capture/run.py --markets "${{ inputs.markets }}" --devices "${{ inputs.devices }}" --reason manual --rebuild-dir debug --store "${{ inputs.store }}" || true
