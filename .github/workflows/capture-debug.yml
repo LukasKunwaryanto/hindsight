@@ -42,6 +42,7 @@ jobs:
           HINDSIGHT_MANIFEST_V2: "1"
           HINDSIGHT_DEBUG_CARDS: "1"
         run: |
+          mkdir -p debug/store
           for i in $(seq ${{ inputs.repeat }}); do
             echo "### Round $i"
             python capture/run.py --markets "${{ inputs.markets }}" --devices "${{ inputs.devices }}" --reason manual --rebuild-dir debug --store "${{ inputs.store }}" || true
