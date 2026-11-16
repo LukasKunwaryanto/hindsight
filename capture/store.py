@@ -22,7 +22,7 @@ def modules_from_manifest(manifest: dict) -> list[dict]:
     out = []
     for i, m in enumerate(manifest.get("modules", [])):
         eid = m["label"][6:] if m["label"].startswith("block:") and m["label"] != "block:anon" else None
-        out.append({"position": i, "label": m["label"], "entry_id": eid, "blob_hash": m["ref"]})
+        out.append({"position": i, "label": m["label"], "entry_id": eid, "blob_hash": m["ref"], "look": m.get("look")})
     return out
 
 
@@ -186,7 +186,8 @@ class SupabaseStore:
             return self._insert("snapshots", [{**row, "changes": changes}], ret=True)[0]["id"]
         sid = self._insert("snapshots", [row], ret=True)[0]["id"]
         # rows only for content blocks (promotions); the full list is in the manifest
-        self._insert("snapshot_modules", [{**m, "snapshot_id": sid} for m in modules if m.get("entry_id")])
+        self._insert("snapshot_modules", [{**{k: v for k, v in m.items() if k != "look"}, "snapshot_id": sid}
+                                          for m in modules if m.get("entry_id")])
         if changes:
             self._insert("snapshot_changes", [{**c, "snapshot_id": sid, "previous_snapshot_id": row.get("previous_snapshot_id")} for c in changes])
         return sid

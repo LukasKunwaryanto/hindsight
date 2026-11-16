@@ -230,6 +230,11 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None, site_le
     doc = lxml.html.fromstring(frozen["html"])
     for el in doc.xpath("//script|//style|//link|//noscript|//iframe"):
         el.getparent().remove(el)
+    # each element's look (browser.FREEZE_JS): kept aside, never part of a stored piece
+    looks = {}
+    for el in doc.iter():
+        if isinstance(el.tag, str) and "data-hs-look" in el.attrib:
+            looks[el] = el.attrib.pop("data-hs-look")
     imgs = {str(i["id"]): i for i in frozen["imgs"]}
     for el in doc.iter():
         if not isinstance(el.tag, str):
@@ -348,9 +353,10 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None, site_le
         raise RuntimeError("Page has no #container element; layout changed?")
 
     def cut(el, label, entry_id=None):
+        look = sha16("".join(looks.get(e, "-") for e in el.iter() if isinstance(e.tag, str))) if looks else None
         h = P.blob("module", frag(el))
         placeholder(el, f'<hs-module ref="{h}"></hs-module>')
-        modules.append({"position": len(modules), "label": label, "entry_id": entry_id, "blob_hash": h})
+        modules.append({"position": len(modules), "label": label, "entry_id": entry_id, "blob_hash": h, "look": look})
 
     def cut_block(b):
         ids = [e.get("id") for e in b.iter() if isinstance(e.tag, str) and e.get("id") and ENTRY_ID_RE.match(e.get("id"))]
@@ -381,7 +387,8 @@ def build(frozen: dict, page_url: str, known_assets: dict | None = None, site_le
 
     shell = P.blob("shell", "<!DOCTYPE html>\n" + lxml.html.tostring(doc, encoding="unicode"))
     manifest = {"version": 2 if WRITE_V2 else 1, "base": base, "shell": shell, "static_css": static, "ruleset": ruleset,
-                "modules": [{"label": m["label"], "ref": m["blob_hash"]} for m in modules], "cards": cards}
+                "modules": [{"label": m["label"], "ref": m["blob_hash"], **({"look": m["look"]} if m.get("look") else {})}
+                            for m in modules], "cards": cards}
     if grid:
         manifest["grid"] = grid
         manifest["grid_ratio"] = grid_ratio

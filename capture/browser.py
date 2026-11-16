@@ -35,6 +35,21 @@ def is_tracking(url: str) -> bool:
 # pins its chosen source, and reads every stylesheet from the browser (most CSS is
 # injected by JavaScript and is not in the HTML).
 FREEZE_JS = r"""() => {
+  // What each element looks like (computed styling, not class names): a site release that renames classes
+  // but looks the same then counts as unchanged. Timing-dependent properties (animations, carousel fades,
+  // transitions) are left out.
+  const LOOK = ['display','position','color','background-color','background-image','font-family','font-size',
+    'font-weight','font-style','line-height','letter-spacing','text-transform','text-decoration-line','text-align',
+    'border-top-width','border-right-width','border-bottom-width','border-left-width','border-top-style',
+    'border-top-color','border-right-color','border-bottom-color','border-left-color','border-radius',
+    'padding-top','padding-right','padding-bottom','padding-left','margin-top','margin-right','margin-bottom',
+    'margin-left','box-shadow','gap','flex-direction','justify-content','align-items','grid-template-columns',
+    'object-fit','fill','stroke'];
+  const fnv = (str) => { let h = 0x811c9dc5; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16); };
+  for (const el of document.body.querySelectorAll('*')) {
+    const cs = getComputedStyle(el);
+    el.setAttribute('data-hs-look', fnv(LOOK.map(p => cs.getPropertyValue(p)).join('|')));
+  }
   document.querySelectorAll('picture source').forEach(s => s.remove());
   const imgs = [];
   document.querySelectorAll('img').forEach((el, i) => {

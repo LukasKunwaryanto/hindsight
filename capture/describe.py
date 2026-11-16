@@ -101,7 +101,7 @@ CLASS_RE = re.compile(r' class="[^"]*"')
 SVG_RE = re.compile(r"hs-asset:([0-9a-f]{16}):image/svg\+xml")
 BLANK = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
 # Not changes: countdowns ticking, header states, carousels reshuffling the same products, icons not loaded yet
-NOISE = ("timer", "state", "reorder", "flake")
+NOISE = ("timer", "state", "reorder", "flake", "restyle")
 CARD_RE = re.compile(r'<hs-card [ik]="[^"]+"></hs-card>')
 SITE_PARTS = ("header", "footer", "chrome")
 
@@ -195,6 +195,8 @@ def describe_changes(prev: list[dict] | None, cur: list[dict], texts: dict[str, 
         p = pk.get(k)
         if p and p["blob_hash"] != m["blob_hash"]:
             kind = _kind_of_edit(texts.get(p["blob_hash"], ""), texts.get(m["blob_hash"], ""), asset_urls or {}, m["label"])
+            if kind == "style" and p.get("look") and p.get("look") == m.get("look"):
+                kind = "restyle"  # new markup or class names, same look (e.g. a site release): not a change
             changes.append({"kind": kind, "entry_id": m["entry_id"], "position": m["position"], "rank": cr.get(id(m)),
                             "detail": {"label": m["label"], "title": m.get("title", ""), "was": p.get("title", ""),
                                        "before": p["blob_hash"], "after": m["blob_hash"]}})

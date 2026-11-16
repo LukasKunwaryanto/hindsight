@@ -11,6 +11,10 @@ on:
       devices:
         default: desktop
         required: true
+      repeat:
+        description: "How many times to capture in a row (2 = check that an unchanged page stays unchanged)"
+        default: "1"
+        required: true
       store:
         description: "supabase (stores for real) or memory:debug/store (test only, nothing saved)"
         default: memory:debug/store
@@ -37,7 +41,11 @@ jobs:
           HINDSIGHT_BYPASS_HEADER: ${{ secrets.HINDSIGHT_BYPASS_HEADER }}
           HINDSIGHT_MANIFEST_V2: "1"
           HINDSIGHT_DEBUG_CARDS: "1"
-        run: python capture/run.py --markets "${{ inputs.markets }}" --devices "${{ inputs.devices }}" --reason manual --rebuild-dir debug --store "${{ inputs.store }}"
+        run: |
+          for i in $(seq ${{ inputs.repeat }}); do
+            echo "### Round $i"
+            python capture/run.py --markets "${{ inputs.markets }}" --devices "${{ inputs.devices }}" --reason manual --rebuild-dir debug --store "${{ inputs.store }}" || true
+          done
       - if: always()
         uses: actions/upload-artifact@v4
         with:
