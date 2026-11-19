@@ -352,3 +352,8 @@ s3_secret_key = "env(S3_SECRET_KEY)"
 [functions.sync-poll]
 enabled = true
 verify_jwt = false
+
+# Read-only API for claude.ai artifacts (no key in the page). Reads with the project's publishable key.
+[functions.archive]
+enabled = true
+verify_jwt = false
