@@ -46,8 +46,12 @@ jobs:
       - name: Smoke test
         run: |
           sleep 5
-          curl -sS -o /dev/null -w "status %{http_code}\n" "https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/archive/api/status"
-          curl -fsS "https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/archive/api/status"
-          echo
-          curl -fsS "https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/archive/api/markets" | head -c 400
-          echo
+          base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/archive"
+          ok=1
+          for p in /api/status /api/markets; do
+            echo "== $p"
+            code=$(curl -sS -o body.txt -w "%{http_code}" -H "Origin: https://example.claudeusercontent.com" "$base$p")
+            echo "status $code"; head -c 600 body.txt; echo
+            [ "$code" = 200 ] || ok=0
+          done
+          [ $ok = 1 ]
