@@ -93,15 +93,21 @@ SETTLE_JS = """async (maxMs) => {
 # What a visitor sees, measured the same way on the live page and on its rebuild (verify.py):
 # large images that loaded and are not transparent themselves, and the page height.
 VISIBLE_JS = """() => {
+  // Product cards are counted as cards (with at least one image showing), not per image: a live card can hold
+  // several pictures (hover or swipe images clipped by the card) while a stored grid card shows one.
   const W = document.documentElement.clientWidth;
-  let visible = 0;
-  for (const i of document.images) {
+  const shows = (i) => {
     const r = i.getBoundingClientRect();
-    if (r.width < 40 || r.height < 40 || r.right < 0 || r.left > W) continue;
+    if (r.width < 40 || r.height < 40 || r.right < 0 || r.left > W) return false;
     const cs = getComputedStyle(i);
-    if (i.complete && i.naturalWidth > 0 && parseFloat(cs.opacity || '1') >= 0.1 && cs.visibility !== 'hidden') visible++;
-  }
-  return {images: visible, height: document.documentElement.scrollHeight};
+    return i.complete && i.naturalWidth > 0 && parseFloat(cs.opacity || '1') >= 0.1 && cs.visibility !== 'hidden';
+  };
+  const CARD = '[data-test-id="product-card"], .hs-gcard';
+  let visible = 0;
+  for (const i of document.images) if (!i.closest(CARD) && shows(i)) visible++;
+  let cards = 0;
+  for (const c of document.querySelectorAll(CARD)) if ([...c.querySelectorAll('img')].some(shows)) cards++;
+  return {images: visible, cards, height: document.documentElement.scrollHeight};
 }"""
 
 WAIT_IMAGES_JS = """async (ms) => {

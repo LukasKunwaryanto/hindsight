@@ -52,9 +52,12 @@ async def verify(browser, html: str, device: str, live: dict) -> dict:
     problems = []
     if got["images"] < live["images"] * 0.9 - 1:
         problems.append(f"{live['images'] - got['images']} images missing or invisible")
+    if got.get("cards", 0) < live.get("cards", 0) * 0.9 - 1:
+        problems.append(f"{live['cards'] - got['cards']} products without an image")
     if live["height"] and abs(got["height"] - live["height"]) > 0.15 * live["height"]:
         problems.append(f"height {got['height']} vs {live['height']}")
     if diff is not None and diff > MAX_DIFF:
         problems.append(f"first screen {round(diff * 100)}% different")
     return {"_shots": (live.get("shot"), shot), "ok": not problems, "problems": problems, "images_live": live["images"], "images_stored": got["images"],
+            "cards_live": live.get("cards"), "cards_stored": got.get("cards"),
             "height_live": live["height"], "height_stored": got["height"], "first_screen_diff": diff}
