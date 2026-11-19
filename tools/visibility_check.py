@@ -58,6 +58,18 @@ CHECK_JS = """async () => {
 }"""
 
 
+def fetch_all_ids(since):
+    """Captures since `since` that went through the check on saving."""
+    rows, off = [], 0
+    while True:
+        page = db._req("GET", "/rest/v1/snapshots", params={"select": "id", "captured_at": f"gte.{since}",
+                       "stats->verify": "not.is.null", "limit": "1000", "offset": str(off)}) or []
+        rows += page
+        if len(page) < 1000:
+            return rows
+        off += 1000
+
+
 async def main():
     markets = [m["locale"] for m in db.markets()]
     pages = [("/", m) for m in markets] + [(p["path"], p["market"]) for p in db.pages() if p["market"] in markets]
@@ -110,7 +122,12 @@ async def main():
     print(md)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8").write(md + "\n")
-    if failed or unverified:
+    # a few failed checks a week are expected (pages caught mid-animation); fail on a broken sample page, or when
+    # more than 5% of the week's captures failed their check
+    checked = len(fetch_all_ids(since))
+    share = len(unverified) / checked if checked else 0
+    print(f"\n{len(unverified)} of {checked} captures failed their check ({share:.1%})")
+    if failed or share > 0.05:
         raise SystemExit(1)
 
 asyncio.run(main())

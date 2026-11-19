@@ -144,6 +144,10 @@ async def capture_page(browser, url: str, device: str, locale: str, extra_header
     try:
         resp = await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         status = resp.status if resp else None
+        if status and status >= 500:  # the site had a hiccup: try once more before giving up
+            await page.wait_for_timeout(15_000)
+            resp = await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            status = resp.status if resp else None
         await page.wait_for_timeout(2500)
         html0 = await page.content()
         challenged = [m for m in CHALLENGE_MARKERS if m in html0]
@@ -159,6 +163,8 @@ async def capture_page(browser, url: str, device: str, locale: str, extra_header
             await page.wait_for_timeout(300)
             height = await page.evaluate("document.body.scrollHeight")
         await page.evaluate("window.scrollTo(0,0)")
+        # carousels back to their first slide, so arrows and visible slides don't depend on where scrolling left them
+        await page.evaluate("() => { for (const el of document.querySelectorAll('*')) if (el.scrollLeft > 0) el.scrollLeft = 0; }")
         # Content loaded after scrolling (product carousels) can arrive late when the machine is busy:
         # wait for the network to go quiet and the page to stop growing before freezing it.
         try:

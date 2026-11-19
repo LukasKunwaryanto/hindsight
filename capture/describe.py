@@ -106,9 +106,29 @@ CARD_RE = re.compile(r'<hs-card [ik]="[^"]+"></hs-card>')
 SITE_PARTS = ("header", "footer", "chrome")
 
 
+GCARD_RE = re.compile(r"(?:<li\b[^>]*>\s*)?<hs-gcard></hs-gcard>(?:\s*</li>)?")
+
+
+def _ui_state(h: str) -> str:
+    """A block without the parts that depend on loading or scroll state rather than content: listing-grid slots
+    (how many products had loaded) and icon-only buttons (a carousel's previous/next arrows show or hide with
+    its scroll position)."""
+    h = GCARD_RE.sub("", h)
+    try:
+        el = lxml.html.fromstring(f"<div>{h}</div>")
+    except Exception:
+        return h
+    for b in el.xpath("//button"):
+        if not "".join(b.itertext()).strip():
+            b.drop_tree()
+    return lxml.html.tostring(el, encoding="unicode")
+
+
 def _kind_of_edit(before: str, after: str, asset_urls: dict, label: str = "") -> str:
     """image | text | style, for a block whose HTML changed but kept its identity.
     asset_urls: stored image hash -> original URL, so re-encodes of one picture compare equal."""
+    if before != after and _ui_state(before) == _ui_state(after):
+        return "flake"  # only grid slots or a carousel's arrow buttons came and went: loading/scroll state
     cards = lambda h: re.findall(r'<hs-card [ik]="([^"]+)"', h)  # in page order
     if CARD_RE.sub("", before) == CARD_RE.sub("", after) and cards(before) != cards(after):
         # only product cards moved around inside a carousel (v2 keys by SKU): same products → no change
