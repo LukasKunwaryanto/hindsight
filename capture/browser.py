@@ -35,6 +35,27 @@ def is_tracking(url: str) -> bool:
 # pins its chosen source, and reads every stylesheet from the browser (most CSS is
 # injected by JavaScript and is not in the HTML).
 FREEZE_JS = r"""() => {
+  // Product cards with a second picture (shown on hover, or by swiping on mobile): keep only the picture a visitor
+  // sees at rest, i.e. the one most visible within the card, so alternates are never stored.
+  document.querySelectorAll('[data-test-id="product-card"]').forEach(card => {
+    const cr = card.getBoundingClientRect();
+    const imgs = [...card.querySelectorAll('img')].filter(i => { const r = i.getBoundingClientRect(); return r.width >= 40 && r.height >= 40; });
+    if (imgs.length < 2) return;
+    const seen = (i) => {
+      let op = 1;
+      for (let e = i; e && e !== card; e = e.parentElement) {
+        const cs = getComputedStyle(e);
+        if (cs.display === 'none' || cs.visibility === 'hidden') return 0;
+        op *= parseFloat(cs.opacity || '1');
+      }
+      const r = i.getBoundingClientRect();
+      const w = Math.max(0, Math.min(r.right, cr.right) - Math.max(r.left, cr.left));
+      const h = Math.max(0, Math.min(r.bottom, cr.bottom) - Math.max(r.top, cr.top));
+      return op * w * h;
+    };
+    const best = imgs.reduce((a, b) => seen(b) > seen(a) ? b : a);
+    imgs.forEach(i => { if (i !== best) i.remove(); });
+  });
   // What each element looks like (computed styling, not class names): a site release that renames classes
   // but looks the same then counts as unchanged. Timing-dependent properties (animations, carousel fades,
   // transitions) are left out.
