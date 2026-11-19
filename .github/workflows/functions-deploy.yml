@@ -45,8 +45,11 @@ jobs:
 
       - name: Smoke test
         run: |
-          sleep 5
           base="https://$SUPABASE_PROJECT_REF.supabase.co/functions/v1/archive"
+          # The Supabase GitHub integration deploys on the same push: give it a few minutes.
+          for i in $(seq 1 18); do
+            curl -fsS -o /dev/null "$base/api/status" && break; sleep 10
+          done
           ok=1
           for p in /api/status /api/markets; do
             echo "== $p"

@@ -4,7 +4,7 @@
  * period, the previous period, 12 months) and applies filters, so the server only reads.
  * Read-only: every call is a select through lib/hindsight/supabase.ts.
  */
-import process from 'node:process';
+import { process } from './env.ts';
 import { select } from './supabase.ts';
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;

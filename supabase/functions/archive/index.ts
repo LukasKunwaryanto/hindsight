@@ -9,7 +9,7 @@
  * ALLOWED_ORIGINS (optional function secret): comma-separated origins, or "*". Default: claude.ai artifact
  * origins and localhost. CORS only limits browsers; the data is the same the publishable key already reads.
  */
-import "./_lib/env.ts";
+import { process } from "./_lib/env.ts";
 import {
   getMarkets, getSnapshots, getSnapshotHtmlContent, getSnapshotModules, getSnapshotChanges,
   getSnapshotMetrics, getCaptureHealth,
@@ -69,7 +69,7 @@ Deno.serve(async (req) => {
 
   try {
     if (path === "/" || path === "/api/status") {
-      return json(req, process_ok());
+      return json(req, process.env.SUPABASE_PUBLISHABLE_KEY ? { ok: true } : { ok: false, error: "The function has no publishable key in its environment." });
     }
     if (path === "/api/markets") return json(req, await getMarkets(), 200, "max-age=300");
     if (path === "/api/snapshots") return json(req, await getSnapshots(mk, q.get("includeSmall") === "true"), 200, "max-age=60");
@@ -105,8 +105,3 @@ Deno.serve(async (req) => {
     return fail(req, err);
   }
 });
-
-function process_ok() {
-  const has = !!(Deno.env.get("SUPABASE_PUBLISHABLE_KEYS") || Deno.env.get("SUPABASE_ANON_KEY"));
-  return has ? { ok: true } : { ok: false, error: "The function has no publishable key in its environment." };
-}

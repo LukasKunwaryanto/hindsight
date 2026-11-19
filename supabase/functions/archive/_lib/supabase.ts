@@ -9,7 +9,7 @@
  */
 import { gunzipSync } from "node:zlib";
 import { Buffer } from "node:buffer";
-import process from "node:process";
+import { process } from "./env.ts";
 import { rebuild, type Manifest, type SiteParts } from "./rebuild.ts";
 
 const URL_ = (process.env.SUPABASE_URL ?? "").replace(/\/$/, "");

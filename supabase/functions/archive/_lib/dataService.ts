@@ -5,7 +5,7 @@
  * NO fallback / mock data is permitted. If secrets are missing or requests fail,
  * an error is thrown.
  */
-import process from 'node:process';
+import { process } from './env.ts';
 import { select, snapshotHtml } from './supabase.ts';
 
 /** Calendar day in Stockholm (YYYY-MM-DD): metric days are Stockholm dates, timestamps are UTC. */

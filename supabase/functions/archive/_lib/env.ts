@@ -1,7 +1,7 @@
-// Runs before the copied modules read process.env: gives them the project's read-only key.
+// Stands in for Node's process.env in the modules copied from hindsight-app. The edge runtime
+// doesn't let code set environment variables, so the values are handed over here instead.
 // Supabase provides these to every edge function, so no key is stored anywhere new.
 // Uses the publishable (anon) key on purpose: the same read-only access hindsight-app has. Never the secret key.
-import process from "node:process";
 
 function publishableKey(): string {
   const keys = Deno.env.get("SUPABASE_PUBLISHABLE_KEYS");
@@ -14,5 +14,9 @@ function publishableKey(): string {
   return Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 }
 
-process.env.SUPABASE_URL ??= Deno.env.get("SUPABASE_URL") ?? "";
-process.env.SUPABASE_PUBLISHABLE_KEY ??= publishableKey();
+export const process = {
+  env: {
+    SUPABASE_URL: Deno.env.get("SUPABASE_URL") ?? "",
+    SUPABASE_PUBLISHABLE_KEY: publishableKey(),
+  } as Record<string, string | undefined>,
+};
